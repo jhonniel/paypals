@@ -1,0 +1,266 @@
+import { z } from "zod";
+import { getAuthedClient } from "@/lib/supabase/auth";
+import { ok, unauthorized, notFound, fromZod, fail, serverError } from "@/lib/api";
+import { computeReceiptTotals } from "@/lib/money";
+
+type Params = { params: Promise<{ id: string }> };
+
+export async function GET(_request: Request, { params }: Params) {
+  try {
+    const auth = await getAuthedClient();
+    if (!auth) return unauthorized();
+    const { supabase, user } = auth;
+    const { id } = await params;
+
+    const { data: receipt, error } = await supabase
+      .from("receipts")
+      .select("*")
+      .eq("id", id)
+      .eq("created_by", user.id)
+      .maybeSingle();
+
+    if (error) return fail(error.message, 400);
+    if (!receipt) return notFound("Receipt not found");
+
+    const [{ data: items }, { data: images }, { data: history }] = await Promise.all([
+      supabase
+        .from("receipt_items")
+        .select("*")
+        .eq("receipt_id", id)
+        .order("sort_order", { ascending: true }),
+      supabase.from("receipt_images").select("*").eq("receipt_id", id),
+      supabase
+        .from("receipt_history")
+        .select("*")
+        .eq("receipt_id", id)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    // Signed URL for first image
+    let imageUrl: string | null = null;
+    const path = images?.[0]?.storage_path;
+    if (path) {
+      const { data: signed } = await supabase.storage
+        .from("receipts")
+        .createSignedUrl(path, 60 * 30);
+      imageUrl = signed?.signedUrl ?? null;
+    }
+
+    return ok({
+      receipt,
+      items: items ?? [],
+      images: images ?? [],
+      history: history ?? [],
+      imageUrl,
+    });
+  } catch (error) {
+    console.error(error);
+    return serverError();
+  }
+}
+
+const itemSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().min(1).max(200),
+  quantity: z.number().positive(),
+  unit_price: z.number().min(0),
+  total_price: z.number().min(0),
+  sort_order: z.number().int().min(0).optional(),
+});
+
+const patchSchema = z.object({
+  merchant: z.string().max(200).nullable().optional(),
+  receipt_date: z.string().nullable().optional(),
+  receipt_time: z.string().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  currency: z.string().length(3).optional(),
+  tax: z.number().min(0).optional(),
+  discount: z.number().min(0).optional(),
+  service_charge: z.number().min(0).optional(),
+  tip: z.number().min(0).optional(),
+  status: z
+    .enum([
+      "draft",
+      "uploaded",
+      "ocr_complete",
+      "edited",
+      "members_assigned",
+      "finalized",
+      "archived",
+    ])
+    .optional(),
+  items: z.array(itemSchema).optional(),
+});
+
+export async function PATCH(request: Request, { params }: Params) {
+  try {
+    const auth = await getAuthedClient();
+    if (!auth) return unauthorized();
+    const { supabase, user } = auth;
+    const { id } = await params;
+
+    const body = await request.json();
+    const parsed = patchSchema.safeParse(body);
+    if (!parsed.success) return fromZod(parsed.error);
+
+    const { data: existing } = await supabase
+      .from("receipts")
+      .select("id")
+      .eq("id", id)
+      .eq("created_by", user.id)
+      .maybeSingle();
+
+    if (!existing) return notFound("Receipt not found");
+
+    const { items, ...fields } = parsed.data;
+
+    let totalsUpdate: Record<string, number> = {};
+
+    if (items) {
+      await supabase.from("receipt_items").delete().eq("receipt_id", id);
+      if (items.length > 0) {
+        const { error: itemsError } = await supabase.from("receipt_items").insert(
+          items.map((item, index) => ({
+            receipt_id: id,
+            name: item.name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            sort_order: item.sort_order ?? index,
+          }))
+        );
+        if (itemsError) return fail(itemsError.message, 400);
+      }
+
+      const computed = computeReceiptTotals({
+        items: items.map((i) => ({
+          quantity: i.quantity,
+          unitPrice: i.unit_price,
+          totalPrice: i.total_price,
+        })),
+        tax: fields.tax,
+        discount: fields.discount,
+        serviceCharge: fields.service_charge,
+        tip: fields.tip,
+      });
+
+      totalsUpdate = {
+        subtotal: computed.itemsSubtotal,
+        tax: computed.tax,
+        discount: computed.discount,
+        service_charge: computed.serviceCharge,
+        tip: computed.tip,
+        total: computed.total,
+      };
+    } else if (
+      fields.tax !== undefined ||
+      fields.discount !== undefined ||
+      fields.service_charge !== undefined ||
+      fields.tip !== undefined
+    ) {
+      const { data: currentItems } = await supabase
+        .from("receipt_items")
+        .select("quantity, unit_price, total_price")
+        .eq("receipt_id", id);
+
+      const { data: current } = await supabase
+        .from("receipts")
+        .select("tax, discount, service_charge, tip")
+        .eq("id", id)
+        .single();
+
+      const computed = computeReceiptTotals({
+        items: (currentItems ?? []).map((i) => ({
+          quantity: Number(i.quantity),
+          unitPrice: Number(i.unit_price),
+          totalPrice: Number(i.total_price),
+        })),
+        tax: fields.tax ?? Number(current?.tax ?? 0),
+        discount: fields.discount ?? Number(current?.discount ?? 0),
+        serviceCharge: fields.service_charge ?? Number(current?.service_charge ?? 0),
+        tip: fields.tip ?? Number(current?.tip ?? 0),
+      });
+
+      totalsUpdate = {
+        subtotal: computed.itemsSubtotal,
+        tax: computed.tax,
+        discount: computed.discount,
+        service_charge: computed.serviceCharge,
+        tip: computed.tip,
+        total: computed.total,
+      };
+    }
+
+    const status =
+      fields.status ??
+      (items ? "edited" : undefined);
+
+    const { data: receipt, error } = await supabase
+      .from("receipts")
+      .update({
+        ...fields,
+        ...totalsUpdate,
+        ...(status ? { status } : {}),
+        ...(status === "finalized" ? { finalized_at: new Date().toISOString() } : {}),
+      })
+      .eq("id", id)
+      .eq("created_by", user.id)
+      .select("*")
+      .single();
+
+    if (error) return fail(error.message, 400);
+
+    await supabase.from("receipt_history").insert({
+      receipt_id: id,
+      user_id: user.id,
+      event: status === "finalized" ? "finalized" : "edited",
+      metadata: { fields: Object.keys(parsed.data) },
+    });
+
+    const { data: savedItems } = await supabase
+      .from("receipt_items")
+      .select("*")
+      .eq("receipt_id", id)
+      .order("sort_order", { ascending: true });
+
+    return ok({ receipt, items: savedItems ?? [] });
+  } catch (error) {
+    console.error(error);
+    return serverError();
+  }
+}
+
+export async function DELETE(_request: Request, { params }: Params) {
+  try {
+    const auth = await getAuthedClient();
+    if (!auth) return unauthorized();
+    const { supabase, user } = auth;
+    const { id } = await params;
+
+    const { data: images } = await supabase
+      .from("receipt_images")
+      .select("storage_path")
+      .eq("receipt_id", id);
+
+    const { error } = await supabase
+      .from("receipts")
+      .delete()
+      .eq("id", id)
+      .eq("created_by", user.id);
+
+    if (error) return fail(error.message, 400);
+
+    const paths = (images ?? []).map((i) => i.storage_path).filter(Boolean);
+    if (paths.length) {
+      await supabase.storage.from("receipts").remove(paths);
+      await supabase.storage
+        .from("ocr-json")
+        .remove([`${user.id}/${id}/ocr.json`]);
+    }
+
+    return ok({ deleted: true });
+  } catch (error) {
+    console.error(error);
+    return serverError();
+  }
+}
