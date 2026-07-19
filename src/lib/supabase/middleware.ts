@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { safeRedirectPath } from "@/lib/security";
+import { AUTH_ERROR_COOKIE } from "@/lib/oauth-cookies";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -31,7 +32,11 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
-  const authError = request.nextUrl.searchParams.get("error");
+  const authError =
+    request.nextUrl.searchParams.get("error") ||
+    request.cookies.get(AUTH_ERROR_COOKIE)?.value ||
+    null;
+
   const isAppRoute =
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/groups") ||
@@ -49,6 +54,13 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/magic-link");
 
   const isClaimInvite = pathname.startsWith("/claim-invite");
+  const isLoginOrSignup =
+    pathname.startsWith("/login") || pathname.startsWith("/signup");
+
+  // OAuth rejection flash: always allow login/signup to render the error
+  if (authError && isLoginOrSignup) {
+    return supabaseResponse;
+  }
 
   if (!user && isAppRoute) {
     const url = request.nextUrl.clone();
@@ -71,12 +83,10 @@ export async function updateSession(request: NextRequest) {
       .eq("id", user.id)
       .maybeSingle();
 
-    // Migration 004 not applied → column missing; allow access
     const migrationMissing =
       profileError?.message?.includes("invite_verified") ||
       profileError?.code === "42703";
 
-    // No profile row → treat as unverified (do not auto-pass into the app)
     const inviteVerified = migrationMissing
       ? true
       : profile == null
@@ -104,16 +114,7 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.redirect(new URL(next, request.url));
     }
 
-    // Logged in but unverified on login/signup:
-    // Keep them on the page when showing an OAuth rejection error
-    // (otherwise middleware strips ?error= and they never see the message).
     if (user && isAuthRoute && !inviteVerified) {
-      if (
-        authError &&
-        (pathname.startsWith("/login") || pathname.startsWith("/signup"))
-      ) {
-        return supabaseResponse;
-      }
       return NextResponse.redirect(new URL("/claim-invite", request.url));
     }
   }

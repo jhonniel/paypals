@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -19,6 +19,20 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   invite_required: "A valid invite code is required to create an account.",
   auth_callback: "Sign-in failed. Please try again.",
 };
+
+function readAuthErrorCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith("paypals_auth_error="));
+  if (!match) return null;
+  return decodeURIComponent(match.split("=").slice(1).join("=") || "");
+}
+
+function clearAuthErrorCookie() {
+  if (typeof document === "undefined") return;
+  document.cookie = "paypals_auth_error=; Path=/; Max-Age=0; SameSite=Lax";
+}
 
 export function LoginForm() {
   const router = useRouter();
@@ -39,16 +53,14 @@ export function LoginForm() {
     },
   });
 
-  const authErrorMessage = useMemo(() => {
-    if (!authError) return null;
-    return AUTH_ERROR_MESSAGES[authError] ?? decodeURIComponent(authError);
-  }, [authError]);
-
   useEffect(() => {
-    if (!authErrorMessage) return;
-    setFormError(authErrorMessage);
-    toast.error(authErrorMessage);
-  }, [authErrorMessage]);
+    const code = authError || readAuthErrorCookie();
+    if (!code) return;
+    const message = AUTH_ERROR_MESSAGES[code] ?? decodeURIComponent(code);
+    setFormError(message);
+    toast.error(message);
+    clearAuthErrorCookie();
+  }, [authError]);
 
   async function onSubmit(values: LoginValues) {
     setFormError(null);
@@ -74,8 +86,30 @@ export function LoginForm() {
     }
   }
 
+  const notRegistered = formError === "Your email is not yet registered.";
+
   return (
     <div className="space-y-6">
+      {formError && (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+        >
+          <p className="font-medium">{formError}</p>
+          {notRegistered && (
+            <p className="mt-1 text-xs text-destructive/90">
+              Create an account with an invite code first.{" "}
+              <Link
+                href="/signup"
+                className="font-medium underline underline-offset-2"
+              >
+                Sign up
+              </Link>
+            </p>
+          )}
+        </div>
+      )}
+
       <GoogleButton next={next} label="Sign in with Google" mode="login" />
       <p className="-mt-3 text-center text-xs text-muted-foreground">
         New here?{" "}
@@ -92,22 +126,6 @@ export function LoginForm() {
         </div>
       </div>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {formError && (
-          <div
-            role="alert"
-            className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
-          >
-            <p>{formError}</p>
-            {formError === "Your email is not yet registered." && (
-              <p className="mt-1 text-xs text-destructive/90">
-                Create an account with an invite code first.{" "}
-                <Link href="/signup" className="font-medium underline underline-offset-2">
-                  Sign up
-                </Link>
-              </p>
-            )}
-          </div>
-        )}
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input id="email" type="email" autoComplete="email" {...register("email")} />

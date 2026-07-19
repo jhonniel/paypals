@@ -52,14 +52,26 @@ export function SignupForm() {
   }, [presetInvite, setValue]);
 
   useEffect(() => {
-    if (!authError) return;
+    const fromQuery = authError;
+    const fromCookie =
+      typeof document !== "undefined"
+        ? document.cookie
+            .split("; ")
+            .find((row) => row.startsWith("paypals_auth_error="))
+            ?.split("=")
+            .slice(1)
+            .join("=")
+        : null;
+    const code = fromQuery || (fromCookie ? decodeURIComponent(fromCookie) : null);
+    if (!code) return;
     const messages: Record<string, string> = {
       invite_required: "Enter a valid invite code to create your account.",
       google_not_registered: "Your email is not yet registered.",
     };
-    const msg = messages[authError] ?? decodeURIComponent(authError);
+    const msg = messages[code] ?? decodeURIComponent(code);
     setFormError(msg);
     toast.error(msg);
+    document.cookie = "paypals_auth_error=; Path=/; Max-Age=0; SameSite=Lax";
   }, [authError]);
 
   useEffect(() => {

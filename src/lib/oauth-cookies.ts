@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 export const INVITE_COOKIE = "paypals_oauth_invite";
 export const NEXT_COOKIE = "paypals_oauth_next";
 export const MODE_COOKIE = "paypals_oauth_mode";
+/** Flash error after OAuth rejection (readable by the login/signup client). */
+export const AUTH_ERROR_COOKIE = "paypals_auth_error";
 
 export async function readOAuthCookies() {
   const jar = await cookies();
