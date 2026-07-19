@@ -1,7 +1,11 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
-import { getOcrService } from "@/services/ocr";
-import { DemoOcrProvider } from "@/services/ocr/providers/demo";
+import { getActiveOcrProviderName } from "@/services/ocr";
+import {
+  emptyOcrResult,
+  extractWithPreprocess,
+} from "@/services/ocr/extract-with-preprocess";
 import { computeReceiptTotals, moneyNumber } from "@/lib/money";
+import { tryReceiptDate, tryReceiptTime } from "@/lib/receipt-datetime";
 import { ok, unauthorized, notFound, fail, serverError } from "@/lib/api";
 
 type Params = { params: Promise<{ id: string }> };
@@ -62,18 +66,23 @@ export async function POST(_request: Request, { params }: Params) {
 
     let ocrResult;
     let ocrError: string | null = null;
+    let preprocessMeta = null;
     try {
-      ocrResult = await getOcrService(preferred).extract({
+      const ran = await extractWithPreprocess(
         buffer,
-        mimeType: image.mime_type || "image/jpeg",
-        fileName: image.storage_path.split("/").pop(),
-      });
+        image.mime_type || "image/jpeg",
+        image.storage_path.split("/").pop(),
+        preferred
+      );
+      ocrResult = ran.result;
+      preprocessMeta = ran.meta;
+      if (!ocrResult.items.length && ocrResult.total == null) {
+        throw new Error("No line items found on receipt");
+      }
     } catch (err) {
       ocrError = err instanceof Error ? err.message : "OCR failed";
-      ocrResult = await new DemoOcrProvider().extract({
-        buffer,
-        mimeType: image.mime_type || "image/jpeg",
-      });
+      console.error("[re-OCR]", ocrError);
+      ocrResult = emptyOcrResult(preferred ?? getActiveOcrProviderName(), ocrError);
     }
 
     const duration = Date.now() - started;
@@ -81,8 +90,8 @@ export async function POST(_request: Request, { params }: Params) {
     await supabase.from("ocr_logs").insert({
       receipt_id: id,
       provider: ocrResult.provider,
-      status: ocrError ? "fallback_success" : "success",
-      request_meta: { reprocess: true },
+      status: ocrError ? "ocr_failed" : "success",
+      request_meta: { reprocess: true, preprocess: preprocessMeta },
       response_meta: { itemCount: ocrResult.items.length },
       confidence: ocrResult.confidence,
       error_message: ocrError,
@@ -92,16 +101,17 @@ export async function POST(_request: Request, { params }: Params) {
     await supabase.from("receipt_items").delete().eq("receipt_id", id);
 
     if (ocrResult.items.length > 0) {
-      await supabase.from("receipt_items").insert(
+      const { error: itemsError } = await supabase.from("receipt_items").insert(
         ocrResult.items.map((item, index) => ({
           receipt_id: id,
-          name: item.name,
+          name: item.name.slice(0, 200),
           quantity: item.quantity,
           unit_price: item.unitPrice,
           total_price: item.totalPrice,
           sort_order: index,
         }))
       );
+      if (itemsError) return fail(itemsError.message, 400);
     }
 
     const totals = computeReceiptTotals({
@@ -120,6 +130,8 @@ export async function POST(_request: Request, { params }: Params) {
       .from("receipts")
       .update({
         merchant: ocrResult.merchant,
+        receipt_date: ocrResult.date ? tryReceiptDate(ocrResult.date) : null,
+        receipt_time: ocrResult.time ? tryReceiptTime(ocrResult.time) : null,
         subtotal: totals.itemsSubtotal,
         tax: totals.tax,
         discount: totals.discount,
@@ -129,6 +141,9 @@ export async function POST(_request: Request, { params }: Params) {
           ocrResult.total !== null ? moneyNumber(ocrResult.total) : totals.total,
         status: "ocr_complete",
         ocr_confidence: ocrResult.confidence,
+        notes: ocrError
+          ? `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
+          : null,
       })
       .eq("id", id)
       .select("*")
@@ -140,7 +155,11 @@ export async function POST(_request: Request, { params }: Params) {
       receipt_id: id,
       user_id: user.id,
       event: "ocr_complete",
-      metadata: { reprocess: true, provider: ocrResult.provider },
+      metadata: {
+        reprocess: true,
+        provider: ocrResult.provider,
+        failed: Boolean(ocrError),
+      },
     });
 
     const { data: items } = await supabase
@@ -154,6 +173,7 @@ export async function POST(_request: Request, { params }: Params) {
       items: items ?? [],
       warning: ocrError,
       provider: ocrResult.provider,
+      ocrFailed: Boolean(ocrError),
     });
   } catch (error) {
     console.error(error);

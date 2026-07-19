@@ -1,6 +1,11 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
-import { getOcrService, getActiveOcrProviderName } from "@/services/ocr";
+import { getActiveOcrProviderName } from "@/services/ocr";
+import {
+  emptyOcrResult,
+  extractWithPreprocess,
+} from "@/services/ocr/extract-with-preprocess";
 import { computeReceiptTotals, moneyNumber } from "@/lib/money";
+import { tryReceiptDate, tryReceiptTime } from "@/lib/receipt-datetime";
 import { fail, unauthorized, serverError, created } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -34,6 +39,16 @@ function normalizeMime(mime: string, name: string): string {
   return map[ext ?? ""] ?? lower;
 }
 
+function isUploadBlob(value: FormDataEntryValue | null): boolean {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    typeof (value as Blob).arrayBuffer === "function" &&
+    typeof (value as Blob).size === "number" &&
+    (value as Blob).size > 0
+  );
+}
+
 export async function POST(request: Request) {
   try {
     const auth = await getAuthedClient();
@@ -41,12 +56,15 @@ export async function POST(request: Request) {
     const { supabase, user } = auth;
 
     const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
+    const fileEntry = form.get("file");
+    if (!isUploadBlob(fileEntry)) {
       return fail("Missing file field");
     }
+    const file = fileEntry as Blob;
 
-    const mime = normalizeMime(file.type, file.name);
+    const fileName =
+      file instanceof File && file.name ? file.name : `receipt-${Date.now()}.jpg`;
+    const mime = normalizeMime(file.type, fileName);
     if (!ALLOWED.has(mime) && !ALLOWED.has(file.type)) {
       return fail(`Unsupported file type: ${file.type || mime || "unknown"}`);
     }
@@ -57,12 +75,11 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const receiptId = crypto.randomUUID();
     const ext =
-      file.name.split(".").pop()?.toLowerCase() ||
+      fileName.split(".").pop()?.toLowerCase() ||
       (mime.includes("pdf") ? "pdf" : "jpg");
     const storagePath = `${user.id}/${receiptId}/original.${ext}`;
     const ocrJsonPath = `${user.id}/${receiptId}/ocr.json`;
 
-    // Create receipt shell
     const { data: settings } = await supabase
       .from("user_settings")
       .select("currency")
@@ -99,58 +116,69 @@ export async function POST(request: Request) {
       return fail(`Storage upload failed: ${uploadError.message}`, 400);
     }
 
-    await supabase.from("receipt_images").insert({
+    const { error: imageError } = await supabase.from("receipt_images").insert({
       receipt_id: receiptId,
       storage_path: storagePath,
       mime_type: mime,
       file_size: file.size,
     });
+    if (imageError) {
+      console.error("receipt_images insert", imageError);
+    }
 
     await supabase.from("receipt_history").insert({
       receipt_id: receiptId,
       user_id: user.id,
       event: "uploaded",
-      metadata: { mime, size: file.size, name: file.name },
+      metadata: { mime, size: file.size, name: fileName },
     });
 
-    // OCR
     const started = Date.now();
-    const ocr = getOcrService();
     let ocrResult;
     let ocrError: string | null = null;
+    let preprocessMeta: {
+      preprocessSteps: string[];
+      enhanced: boolean;
+      usedBinaryPass: boolean;
+      pass?: string;
+    } | null = null;
 
     try {
-      ocrResult = await ocr.extract({
-        buffer,
-        mimeType: mime,
-        fileName: file.name,
-      });
+      const ran = await extractWithPreprocess(buffer, mime, fileName);
+      ocrResult = ran.result;
+      preprocessMeta = ran.meta;
+      if (!ocrResult.items.length && ocrResult.total == null) {
+        throw new Error("No line items found on receipt");
+      }
     } catch (err) {
+      // Never inject fake demo (Jollibee) data — leave an empty editable receipt
       ocrError = err instanceof Error ? err.message : "OCR failed";
-      const { DemoOcrProvider } = await import("@/services/ocr/providers/demo");
-      ocrResult = await new DemoOcrProvider().extract({
-        buffer,
-        mimeType: mime,
-        fileName: file.name,
-      });
+      console.error("[upload OCR]", ocrError);
+      ocrResult = emptyOcrResult(getActiveOcrProviderName(), ocrError);
+      preprocessMeta = {
+        preprocessSteps: ["failed"],
+        enhanced: false,
+        usedBinaryPass: false,
+      };
     }
 
     const duration = Date.now() - started;
 
     await supabase.storage.from("ocr-json").upload(
       ocrJsonPath,
-      Buffer.from(JSON.stringify(ocrResult, null, 2), "utf8"),
+      Buffer.from(JSON.stringify({ ...ocrResult, preprocess: preprocessMeta }, null, 2), "utf8"),
       { contentType: "application/json", upsert: true }
     );
 
     await supabase.from("ocr_logs").insert({
       receipt_id: receiptId,
       provider: ocrResult.provider,
-      status: ocrError ? "fallback_success" : "success",
+      status: ocrError ? "ocr_failed" : "success",
       request_meta: {
         mime,
         size: file.size,
         configured: getActiveOcrProviderName(),
+        preprocess: preprocessMeta,
       },
       response_meta: { itemCount: ocrResult.items.length },
       confidence: ocrResult.confidence,
@@ -175,12 +203,12 @@ export async function POST(request: Request) {
         ? moneyNumber(ocrResult.total)
         : totals.total;
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("receipts")
       .update({
         merchant: ocrResult.merchant,
-        receipt_date: ocrResult.date ? tryDate(ocrResult.date) : null,
-        receipt_time: ocrResult.time ? tryTime(ocrResult.time) : null,
+        receipt_date: ocrResult.date ? tryReceiptDate(ocrResult.date) : null,
+        receipt_time: ocrResult.time ? tryReceiptTime(ocrResult.time) : null,
         subtotal: totals.itemsSubtotal,
         tax: totals.tax,
         discount: totals.discount,
@@ -189,20 +217,32 @@ export async function POST(request: Request) {
         total: declaredTotal,
         status: "ocr_complete",
         ocr_confidence: ocrResult.confidence,
+        notes: ocrError
+          ? `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
+          : null,
       })
       .eq("id", receiptId);
 
+    if (updateError) {
+      console.error("receipt update after OCR", updateError);
+      return fail(`Could not save OCR results: ${updateError.message}`, 400);
+    }
+
     if (ocrResult.items.length > 0) {
-      await supabase.from("receipt_items").insert(
+      const { error: itemsError } = await supabase.from("receipt_items").insert(
         ocrResult.items.map((item, index) => ({
           receipt_id: receiptId,
-          name: item.name,
+          name: item.name.slice(0, 200),
           quantity: item.quantity,
           unit_price: item.unitPrice,
           total_price: item.totalPrice,
           sort_order: index,
         }))
       );
+      if (itemsError) {
+        console.error("receipt_items insert", itemsError);
+        return fail(`Could not save line items: ${itemsError.message}`, 400);
+      }
     }
 
     await supabase.from("receipt_history").insert({
@@ -213,6 +253,7 @@ export async function POST(request: Request) {
         provider: ocrResult.provider,
         confidence: ocrResult.confidence,
         items: ocrResult.items.length,
+        fallback: Boolean(ocrError),
       },
     });
 
@@ -229,7 +270,7 @@ export async function POST(request: Request) {
       itemCount: ocrResult.items.length,
       confidence: ocrResult.confidence,
       provider: ocrResult.provider,
-      usedFallback: Boolean(ocrError),
+      ocrFailed: Boolean(ocrError),
       warning: ocrError,
     });
   } catch (error) {
@@ -238,40 +279,4 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : "Upload failed"
     );
   }
-}
-
-function tryDate(raw: string): string | null {
-  const cleaned = raw.trim();
-  // DD/MM/YYYY or MM/DD/YYYY → prefer ISO when unambiguous
-  const m = cleaned.match(/(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,4})/);
-  if (!m) return null;
-  let y: string, mo: string, d: string;
-  if (m[1].length === 4) {
-    y = m[1];
-    mo = m[2].padStart(2, "0");
-    d = m[3].padStart(2, "0");
-  } else if (m[3].length === 4) {
-    // assume D/M/Y common in PH
-    d = m[1].padStart(2, "0");
-    mo = m[2].padStart(2, "0");
-    y = m[3];
-  } else {
-    return null;
-  }
-  const iso = `${y}-${mo}-${d}`;
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return null;
-  return iso;
-}
-
-function tryTime(raw: string): string | null {
-  const m = raw.trim().match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
-  if (!m) return null;
-  let h = Number(m[1]);
-  const min = m[2];
-  const sec = m[3] ?? "00";
-  const ap = m[4]?.toUpperCase();
-  if (ap === "PM" && h < 12) h += 12;
-  if (ap === "AM" && h === 12) h = 0;
-  return `${String(h).padStart(2, "0")}:${min}:${sec}`;
 }

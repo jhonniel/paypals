@@ -1,26 +1,29 @@
 import type { OcrInput, OcrProvider, OcrResult } from "@/services/ocr/types";
-import { parseReceiptText } from "@/services/ocr/parse-receipt-text";
 
 /**
- * Lightweight fallback when no external OCR key is configured.
- * Uses a demo Filipino receipt template so upload → editor flow works locally.
+ * Used ONLY when no OCR API key is configured (local barebones setup).
+ * Real uploads must never fall back to this when a key exists — that caused
+ * fake "Jollibee SM Megamall" data to appear on unrelated receipts.
  */
 export class DemoOcrProvider implements OcrProvider {
   readonly name = "ocrspace" as const;
 
   async extract(input: OcrInput): Promise<OcrResult> {
     void input;
-    const sample = `
-Jollibee SM Megamall
-Date: 07/18/2026  7:42 PM
-1 x Chickenjoy Solo     99.00
-2 x Jolly Spaghetti     110.00
-1 x Extra Rice          35.00
-1 x Coke Float          59.00
-Subtotal               303.00
-VAT                    36.36
-Total                  339.36
-`;
-    return parseReceiptText(sample, "ocrspace", { demo: true }, 72);
+    return {
+      provider: "ocrspace",
+      merchant: null,
+      date: null,
+      time: null,
+      items: [],
+      subtotal: null,
+      tax: null,
+      discount: null,
+      serviceCharge: null,
+      tip: null,
+      total: null,
+      confidence: null,
+      raw: { demo: true, message: "No OCR API key configured" },
+    };
   }
 }

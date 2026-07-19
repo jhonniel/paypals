@@ -60,8 +60,17 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
 
   if (error) {
+    const raw = (error.message || "").toLowerCase();
+    let message = "Invalid email or password";
+    if (raw.includes("email not confirmed") || raw.includes("not confirmed")) {
+      message = "Email not confirmed yet. Check your inbox or use a confirmed demo account.";
+    } else if (raw.includes("rate") || error.status === 429) {
+      message = "Too many attempts. Wait a minute and try again.";
+    }
+
+    console.error("[login]", error.message, error.status);
     return NextResponse.json(
-      { error: { code: "UNAUTHORIZED", message: "Invalid email or password" } },
+      { error: { code: "UNAUTHORIZED", message } },
       { status: 401 }
     );
   }

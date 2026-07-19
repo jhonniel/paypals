@@ -5,11 +5,11 @@
 -- =============================================================================
 --
 -- Login credentials (email / password):
---   alex@paypals.dev      / Paypals123!
---   jordan@paypals.dev    / Paypals123!
---   sam@paypals.dev       / Paypals123!
---   morgan@paypals.dev    / Paypals123!
---   casey@paypals.dev     / Paypals123!   (admin)
+--   alex@example.com      / Paypals123!
+--   jordan@example.com    / Paypals123!
+--   sam@example.com       / Paypals123!
+--   morgan@example.com    / Paypals123!
+--   casey@example.com     / Paypals123!   (admin)
 --
 -- =============================================================================
 
@@ -83,7 +83,7 @@ BEGIN
       alex,
       'authenticated',
       'authenticated',
-      'alex@paypals.dev',
+      'alex@example.com',
       pwd,
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -100,7 +100,7 @@ BEGIN
       jordan,
       'authenticated',
       'authenticated',
-      'jordan@paypals.dev',
+      'jordan@example.com',
       pwd,
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -117,7 +117,7 @@ BEGIN
       sam,
       'authenticated',
       'authenticated',
-      'sam@paypals.dev',
+      'sam@example.com',
       pwd,
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -134,7 +134,7 @@ BEGIN
       morgan,
       'authenticated',
       'authenticated',
-      'morgan@paypals.dev',
+      'morgan@example.com',
       pwd,
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -151,7 +151,7 @@ BEGIN
       casey,
       'authenticated',
       'authenticated',
-      'casey@paypals.dev',
+      'casey@example.com',
       pwd,
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
@@ -175,11 +175,11 @@ BEGIN
     created_at,
     updated_at
   ) VALUES
-    (alex, alex, format('{"sub":"%s","email":"alex@paypals.dev","email_verified":true}', alex)::jsonb, 'email', alex::text, now(), now(), now()),
-    (jordan, jordan, format('{"sub":"%s","email":"jordan@paypals.dev","email_verified":true}', jordan)::jsonb, 'email', jordan::text, now(), now(), now()),
-    (sam, sam, format('{"sub":"%s","email":"sam@paypals.dev","email_verified":true}', sam)::jsonb, 'email', sam::text, now(), now(), now()),
-    (morgan, morgan, format('{"sub":"%s","email":"morgan@paypals.dev","email_verified":true}', morgan)::jsonb, 'email', morgan::text, now(), now(), now()),
-    (casey, casey, format('{"sub":"%s","email":"casey@paypals.dev","email_verified":true}', casey)::jsonb, 'email', casey::text, now(), now(), now());
+    (alex, alex, format('{"sub":"%s","email":"alex@example.com","email_verified":true}', alex)::jsonb, 'email', alex::text, now(), now(), now()),
+    (jordan, jordan, format('{"sub":"%s","email":"jordan@example.com","email_verified":true}', jordan)::jsonb, 'email', jordan::text, now(), now(), now()),
+    (sam, sam, format('{"sub":"%s","email":"sam@example.com","email_verified":true}', sam)::jsonb, 'email', sam::text, now(), now(), now()),
+    (morgan, morgan, format('{"sub":"%s","email":"morgan@example.com","email_verified":true}', morgan)::jsonb, 'email', morgan::text, now(), now(), now()),
+    (casey, casey, format('{"sub":"%s","email":"casey@example.com","email_verified":true}', casey)::jsonb, 'email', casey::text, now(), now(), now());
 
   -- Enrich profiles (created by handle_new_user trigger)
   UPDATE public.profiles SET
@@ -316,5 +316,5 @@ BEGIN
     (sam, 'receipt_updated', 'Bento Box Co updated', 'Sam edited items on the office lunch receipt.', '/receipts'),
     (morgan, 'member_joined', 'Welcome to Friday Dinner', 'You are now a member of Friday Dinner.', '/groups');
 
-  RAISE NOTICE 'Paypals seed complete. Sign in as alex@paypals.dev / Paypals123!';
+  RAISE NOTICE 'Paypals seed complete. Sign in as alex@example.com / Paypals123!';
 END $$;

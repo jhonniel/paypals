@@ -46,3 +46,8 @@ export function getActiveOcrProviderName(): OcrProviderName {
 }
 
 export * from "@/services/ocr/types";
+export { preprocessReceiptImage } from "@/services/ocr/preprocess-image";
+export {
+  extractWithPreprocess,
+  emptyOcrResult,
+} from "@/services/ocr/extract-with-preprocess";

@@ -64,15 +64,20 @@ export async function updateSession(request: NextRequest) {
   }
 
   if (user && (isAuthRoute || isClaimInvite || isAppRoute)) {
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("invite_verified, is_admin")
       .eq("id", user.id)
       .maybeSingle();
 
-    // If column missing (migration not applied), skip gate
-    const inviteVerified =
-      profile == null || profile.invite_verified === undefined
+    // Migration 004 not applied → column missing; allow access
+    const migrationMissing =
+      profileError?.message?.includes("invite_verified") ||
+      profileError?.code === "42703";
+
+    const inviteVerified = migrationMissing
+      ? true
+      : profile == null || profile.invite_verified === undefined
         ? true
         : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
 

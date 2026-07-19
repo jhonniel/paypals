@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
+import { readApiJson } from "@/lib/api-client";
 
 const ACCEPT =
   "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
@@ -73,20 +74,38 @@ export function ReceiptUploader() {
           method: "POST",
           body: form,
         });
-        const json = await res.json();
-        if (!res.ok) {
-          throw new Error(json?.error?.message ?? "Upload failed");
+        const parsed = await readApiJson<{
+          data: {
+            id: string;
+            itemCount?: number;
+            warning?: string;
+            ocrFailed?: boolean;
+          };
+        }>(res);
+
+        if (!parsed.ok) {
+          throw new Error(parsed.message);
         }
 
-        if (json.data.warning) {
-          toast.message("Used demo OCR", {
-            description: "Add OCR_SPACE_API_KEY for live extraction.",
+        const payload = parsed.data.data;
+        if (payload.warning || payload.ocrFailed) {
+          toast.message("OCR could not read all items", {
+            description:
+              String(payload.warning ?? "Add items manually or tap Re-run OCR.").slice(
+                0,
+                160
+              ),
           });
         } else {
-          toast.success("Receipt scanned");
+          const count = payload.itemCount ?? 0;
+          toast.success(
+            count
+              ? `Scanned ${count} item${count === 1 ? "" : "s"}`
+              : "Receipt uploaded — add items manually"
+          );
         }
 
-        router.push(`/receipts/${json.data.id}`);
+        router.push(`/receipts/${payload.id}`);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed");

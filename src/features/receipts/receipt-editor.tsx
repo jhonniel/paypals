@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { computeReceiptTotals, formatPHP, lineTotal, moneyNumber } from "@/lib/money";
 import { cn } from "@/utils/cn";
+import { readApiJson } from "@/lib/api-client";
 
 export type EditorItem = {
   key: string;
@@ -84,6 +85,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   const [status, setStatus] = useState("draft");
   const [confidence, setConfidence] = useState<number | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [showEnhanced, setShowEnhanced] = useState(false);
   const [items, setItems] = useState<EditorItem[]>([]);
   const [history, setHistory] = useState<ReceiptPayload["history"]>([]);
 
@@ -91,9 +93,9 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     setLoading(true);
     try {
       const res = await fetch(`/api/receipts/${receiptId}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load");
-      const data = json.data as ReceiptPayload;
+      const parsed = await readApiJson<{ data: ReceiptPayload }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      const data = parsed.data.data;
       setMerchant(data.receipt.merchant ?? "");
       setDate(data.receipt.receipt_date ?? "");
       setTime((data.receipt.receipt_time ?? "").slice(0, 5));
@@ -249,8 +251,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           })),
         }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Save failed");
+      const parsed = await readApiJson(res);
+      if (!parsed.ok) throw new Error(parsed.message);
       toast.success(finalize ? "Receipt finalized" : "Changes saved");
       setStatus(finalize ? "finalized" : "edited");
       if (finalize) router.push("/receipts");
@@ -265,8 +267,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     setReocr(true);
     try {
       const res = await fetch(`/api/ocr/${receiptId}`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "OCR failed");
+      const parsed = await readApiJson(res);
+      if (!parsed.ok) throw new Error(parsed.message);
       toast.success("OCR refreshed");
       await load();
     } catch (err) {
@@ -488,15 +490,35 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
         <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
           {imageUrl && (
             <Card className="overflow-hidden">
-              <CardHeader className="p-4">
-                <CardTitle className="text-base">Receipt image</CardTitle>
+              <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4">
+                <div>
+                  <CardTitle className="text-base">Receipt image</CardTitle>
+                  <CardDescription className="text-xs">
+                    {showEnhanced
+                      ? "Enhanced for OCR (grayscale, contrast, sharpen)"
+                      : "Original upload"}
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowEnhanced((v) => !v)}
+                >
+                  {showEnhanced ? "Original" : "Enhance"}
+                </Button>
               </CardHeader>
               <CardContent className="p-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={imageUrl}
-                  alt="Uploaded receipt"
-                  className="max-h-72 w-full object-contain bg-muted/30"
+                  key={showEnhanced ? "enhanced" : "original"}
+                  src={
+                    showEnhanced
+                      ? `/api/receipts/${receiptId}/enhance`
+                      : imageUrl
+                  }
+                  alt={showEnhanced ? "Enhanced receipt" : "Uploaded receipt"}
+                  className="max-h-96 w-full object-contain bg-muted/30"
                 />
               </CardContent>
             </Card>

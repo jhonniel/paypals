@@ -99,7 +99,9 @@ See [PHASES.md](PHASES.md).
 1. Sign in and open **Upload receipt** (or the Scan button in the mobile nav).
 2. Drop an image/PDF (or use camera / clipboard).
 3. OCR runs automatically → you land in the **receipt editor**.
-4. Fix items, adjust tax/tip, **Save** or **Finalize**.
+   Images are preprocessed first (OpenCV-style: grayscale, contrast, denoise, sharpen) for clearer text.
+4. On the receipt page, toggle **Enhance** to preview the processed image; **Re-run OCR** uses the same pipeline.
+5. Fix items, adjust tax/tip, **Save** or **Finalize**.
 
 Without an OCR API key, a **demo Filipino receipt** is extracted so the flow still works. For live OCR:
 
