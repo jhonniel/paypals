@@ -82,7 +82,7 @@ export function InviteJoinView({ code }: { code: string }) {
             </Link>
           </Button>
           <Button variant="outline" asChild>
-            <Link href={`/signup?next=${encodeURIComponent(`/invite/${code}`)}`}>
+            <Link href={`/signup?invite=${encodeURIComponent(code)}`}>
               Create account
             </Link>
           </Button>

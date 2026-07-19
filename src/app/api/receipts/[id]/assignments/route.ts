@@ -45,7 +45,7 @@ export async function GET(_req: Request, { params }: Params) {
       const { data: ms } = await supabase
         .from("group_members")
         .select(
-          "id, role, user_id, guest_name, guest_email, profiles:user_id(full_name, username, avatar_url)"
+          "id, role, user_id, guest_name, guest_email, profiles:user_id(full_name, username, avatar_url, payment_methods)"
         )
         .eq("group_id", receipt.group_id);
       members = ms ?? [];
@@ -100,10 +100,12 @@ const assignmentSchema = z.object({
 
 const putSchema = z.object({
   group_id: z.string().uuid().nullable().optional(),
+  paid_by_member_id: z.string().uuid().nullable().optional(),
+  settlement_note: z.string().max(500).nullable().optional(),
   assignments: z.array(assignmentSchema),
 });
 
-/** Replace all assignments for this receipt (and optionally link group). */
+/** Replace all assignments for this receipt (and optionally link group / payer). */
 export async function PUT(request: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
@@ -122,10 +124,20 @@ export async function PUT(request: Request, { params }: Params) {
 
     if (!receipt) return notFound("Receipt not found");
 
+    const receiptPatch: Record<string, unknown> = {};
     if (parsed.data.group_id !== undefined) {
+      receiptPatch.group_id = parsed.data.group_id;
+    }
+    if (parsed.data.paid_by_member_id !== undefined) {
+      receiptPatch.paid_by_member_id = parsed.data.paid_by_member_id;
+    }
+    if (parsed.data.settlement_note !== undefined) {
+      receiptPatch.settlement_note = parsed.data.settlement_note?.trim() || null;
+    }
+    if (Object.keys(receiptPatch).length) {
       const { error: gErr } = await supabase
         .from("receipts")
-        .update({ group_id: parsed.data.group_id })
+        .update(receiptPatch)
         .eq("id", id);
       if (gErr) return fail(gErr.message, 400);
     }

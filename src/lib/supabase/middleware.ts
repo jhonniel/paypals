@@ -47,6 +47,8 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/forgot-password") ||
     pathname.startsWith("/magic-link");
 
+  const isClaimInvite = pathname.startsWith("/claim-invite");
+
   if (!user && isAppRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -54,12 +56,49 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthRoute) {
-    const next = safeRedirectPath(
-      request.nextUrl.searchParams.get("next"),
-      "/dashboard"
-    );
-    return NextResponse.redirect(new URL(next, request.url));
+  if (!user && isClaimInvite) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", "/claim-invite");
+    return NextResponse.redirect(url);
+  }
+
+  if (user && (isAuthRoute || isClaimInvite || isAppRoute)) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("invite_verified, is_admin")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    // If column missing (migration not applied), skip gate
+    const inviteVerified =
+      profile == null || profile.invite_verified === undefined
+        ? true
+        : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
+
+    if (!inviteVerified && isAppRoute) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/claim-invite";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+
+    if (inviteVerified && isClaimInvite) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+
+    if (user && isAuthRoute && inviteVerified) {
+      const next = safeRedirectPath(
+        request.nextUrl.searchParams.get("next"),
+        "/dashboard"
+      );
+      return NextResponse.redirect(new URL(next, request.url));
+    }
+
+    // Logged in but unverified on login/signup → send to claim
+    if (user && isAuthRoute && !inviteVerified) {
+      return NextResponse.redirect(new URL("/claim-invite", request.url));
+    }
   }
 
   return supabaseResponse;

@@ -6,7 +6,7 @@ export default function SignupPage() {
   return (
     <AuthShell
       title="Create your account"
-      description="Start splitting receipts in under a minute."
+      description="Invite-only access. Enter your code, then sign up with Google or email."
     >
       <Suspense fallback={<div className="h-40 animate-pulse rounded-xl bg-muted" />}>
         <SignupForm />

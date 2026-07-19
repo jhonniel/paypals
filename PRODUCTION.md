@@ -9,6 +9,7 @@ In the Supabase SQL Editor, apply in order:
 1. `supabase/migrations/001_initial_schema.sql`
 2. `supabase/migrations/002_phase3_invites_realtime.sql`
 3. `supabase/migrations/003_phase4_feature_flags.sql`
+4. `supabase/migrations/004_signup_invites.sql`
 
 Do **not** run `supabase/seed.sql` in production unless you intentionally want demo accounts.
 

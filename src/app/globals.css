@@ -161,6 +161,50 @@ canvas {
     var(--background);
 }
 
+.landing-hero-atmosphere {
+  background:
+    radial-gradient(ellipse 90% 70% at 75% 40%, color-mix(in oklab, var(--primary) 22%, transparent), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 10% 80%, color-mix(in oklab, var(--chart-2) 16%, transparent), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 50% 0%, color-mix(in oklab, var(--foreground) 4%, transparent), transparent 60%),
+    linear-gradient(
+      165deg,
+      color-mix(in oklab, var(--background) 88%, var(--primary)) 0%,
+      var(--background) 42%,
+      var(--background) 100%
+    );
+}
+
+.landing-grid {
+  background-image:
+    linear-gradient(color-mix(in oklab, var(--foreground) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--foreground) 4%, transparent) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 70% 60% at 70% 45%, black 20%, transparent 75%);
+}
+
+.landing-receipt {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--surface-elevated) 96%, var(--primary)) 0%,
+      var(--surface-elevated) 100%
+    );
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent) inset,
+    0 40px 80px -48px color-mix(in oklab, var(--foreground) 45%, transparent);
+}
+
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .shimmer {
   background: linear-gradient(
     90deg,

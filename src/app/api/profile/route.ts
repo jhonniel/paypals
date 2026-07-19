@@ -1,6 +1,23 @@
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { ok, unauthorized, fromZod, serverError, fail } from "@/lib/api";
+import {
+  normalizePaymentMethods,
+  PAYMENT_METHOD_TYPES,
+  MAX_PAYMENT_ACCOUNTS,
+} from "@/lib/payment-methods";
+
+const paymentMethodSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  type: z.enum(PAYMENT_METHOD_TYPES),
+  bank_name: z.string().max(80).optional().default(""),
+  account_name: z.string().max(120).optional().default(""),
+  account_number: z.string().max(64).optional().default(""),
+  qr_code_url: z.string().url().nullable().optional(),
+  // legacy fields still accepted then normalized
+  label: z.string().max(40).optional(),
+  details: z.string().max(200).optional(),
+});
 
 const patchSchema = z.object({
   full_name: z.string().min(1).max(120).optional(),
@@ -13,6 +30,7 @@ const patchSchema = z.object({
     .nullable(),
   bio: z.string().max(280).optional().nullable(),
   avatar_url: z.string().url().optional().nullable(),
+  payment_methods: z.array(paymentMethodSchema).max(MAX_PAYMENT_ACCOUNTS).optional(),
   theme: z.enum(["light", "dark", "system"]).optional(),
   currency: z.string().min(3).max(3).optional(),
   timezone: z.string().min(1).max(64).optional(),
@@ -92,9 +110,15 @@ export async function PATCH(request: Request) {
     } = parsed.data;
 
     if (Object.keys(profileFields).length > 0) {
+      const updatePayload = {
+        ...profileFields,
+        ...(profileFields.payment_methods !== undefined && {
+          payment_methods: normalizePaymentMethods(profileFields.payment_methods),
+        }),
+      };
       const { error } = await supabase
         .from("profiles")
-        .update(profileFields)
+        .update(updatePayload)
         .eq("id", user.id);
       if (error) return fail(error.message, 400);
     }

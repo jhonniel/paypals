@@ -76,6 +76,9 @@ export function AdminPanelView() {
   const qc = useQueryClient();
   const [newKey, setNewKey] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteLabel, setInviteLabel] = useState("");
+  const [inviteMaxUses, setInviteMaxUses] = useState("");
   const [busy, setBusy] = useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -86,6 +89,25 @@ export function AdminPanelView() {
       if (!res.ok) throw new Error(json?.error?.message ?? "Admin access denied");
       return json.data as AdminData;
     },
+  });
+
+  const { data: signupInvites, refetch: refetchInvites } = useQuery({
+    queryKey: ["admin-invites"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/invites");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load invites");
+      return json.data as Array<{
+        id: string;
+        code: string;
+        label: string | null;
+        max_uses: number | null;
+        use_count: number;
+        enabled: boolean;
+        expires_at: string | null;
+      }>;
+    },
+    enabled: !isLoading && !error,
   });
 
   async function toggleAdmin(userId: string, is_admin: boolean) {
@@ -147,6 +169,52 @@ export function AdminPanelView() {
       void qc.invalidateQueries({ queryKey: ["admin"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSignupInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: inviteCode.trim(),
+          label: inviteLabel.trim() || null,
+          max_uses: inviteMaxUses ? Number(inviteMaxUses) : null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Create failed");
+      toast.success("Invite created");
+      setInviteCode("");
+      setInviteLabel("");
+      setInviteMaxUses("");
+      void refetchInvites();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleInvite(id: string, enabled: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/invites", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, enabled }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Update failed");
+      toast.success(enabled ? "Invite enabled" : "Invite disabled");
+      void refetchInvites();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Update failed");
     } finally {
       setBusy(false);
     }
@@ -227,6 +295,7 @@ export function AdminPanelView() {
         <div className="-mx-1 overflow-x-auto px-1">
           <TabsList className="inline-flex h-auto min-w-max">
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="invites">Invites</TabsTrigger>
             <TabsTrigger value="receipts">Receipts</TabsTrigger>
             <TabsTrigger value="ocr">OCR logs</TabsTrigger>
             <TabsTrigger value="flags">Feature flags</TabsTrigger>
@@ -258,6 +327,88 @@ export function AdminPanelView() {
                   </div>
                 </div>
               ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="invites" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Signup invites</CardTitle>
+              <CardDescription>
+                Share these codes so new users can create accounts. Group invite codes also work.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="divide-y divide-border p-0">
+              {(signupInvites ?? []).length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">No invites yet.</p>
+              ) : (
+                (signupInvites ?? []).map((inv) => (
+                  <div
+                    key={inv.id}
+                    className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p className="font-mono text-sm font-semibold tracking-wide">{inv.code}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {inv.label || "Untitled"} · {inv.use_count}
+                        {inv.max_uses != null ? ` / ${inv.max_uses}` : ""} uses
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">Enabled</span>
+                      <Switch
+                        checked={inv.enabled}
+                        disabled={busy}
+                        onCheckedChange={(v) => void toggleInvite(inv.id, v)}
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Create invite</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={(e) => void createSignupInvite(e)} className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="invite-code">Code</Label>
+                  <Input
+                    id="invite-code"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    placeholder="TEAMLAUNCH"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invite-label">Label</Label>
+                  <Input
+                    id="invite-label"
+                    value={inviteLabel}
+                    onChange={(e) => setInviteLabel(e.target.value)}
+                    placeholder="Launch cohort"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invite-max">Max uses (optional)</Label>
+                  <Input
+                    id="invite-max"
+                    type="number"
+                    min={1}
+                    value={inviteMaxUses}
+                    onChange={(e) => setInviteMaxUses(e.target.value)}
+                    placeholder="Unlimited"
+                  />
+                </div>
+                <Button type="submit" disabled={busy || inviteCode.trim().length < 4}>
+                  {busy && <Loader2 className="animate-spin" />}
+                  Create invite
+                </Button>
+              </form>
             </CardContent>
           </Card>
         </TabsContent>

@@ -10,12 +10,14 @@ export async function GET() {
     let receiptBytes = 0;
     let avatarBytes = 0;
     let ocrBytes = 0;
+    let paymentQrBytes = 0;
     let fileCount = 0;
 
     for (const bucket of [
       { name: "receipts" as const, target: "receipt" },
       { name: "avatars" as const, target: "avatar" },
       { name: "ocr-json" as const, target: "ocr" },
+      { name: "payment-qr" as const, target: "paymentQr" },
     ]) {
       const { data: files, error } = await supabase.storage
         .from(bucket.name)
@@ -32,6 +34,7 @@ export async function GET() {
         if (bucket.target === "receipt") receiptBytes += size;
         if (bucket.target === "avatar") avatarBytes += size;
         if (bucket.target === "ocr") ocrBytes += size;
+        if (bucket.target === "paymentQr") paymentQrBytes += size;
       }
     }
 
@@ -51,7 +54,8 @@ export async function GET() {
         receiptBytes,
         avatarBytes,
         ocrBytes,
-        totalBytes: receiptBytes + avatarBytes + ocrBytes,
+        paymentQrBytes,
+        totalBytes: receiptBytes + avatarBytes + ocrBytes + paymentQrBytes,
         fileCount,
         receiptCount: receiptCount ?? 0,
       },

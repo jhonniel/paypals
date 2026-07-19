@@ -54,3 +54,10 @@ Analytics, admin, account controls, polish.
 ## Production
 
 See [PRODUCTION.md](PRODUCTION.md) for the deploy checklist. The app builds with `npm run build`, exposes `/api/health`, and ships with security headers, auth rate limits, and open-redirect protection.
+
+## Invite-only signup
+
+- Signup requires a valid **app invite** (`signup_invites`) or **group invite code**
+- Unverified accounts are redirected to `/claim-invite` until a code is redeemed
+- Admins manage codes under **Admin → Invites**
+- Default seed code: `PAYPALS` (from migration `004_signup_invites.sql`)

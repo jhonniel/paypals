@@ -33,6 +33,10 @@ In the Supabase SQL Editor, run in order:
 1. [`supabase/migrations/001_initial_schema.sql`](supabase/migrations/001_initial_schema.sql)
 2. [`supabase/migrations/002_phase3_invites_realtime.sql`](supabase/migrations/002_phase3_invites_realtime.sql)
 3. [`supabase/migrations/003_phase4_feature_flags.sql`](supabase/migrations/003_phase4_feature_flags.sql)
+4. [`supabase/migrations/004_signup_invites.sql`](supabase/migrations/004_signup_invites.sql) (invite-only signup)
+5. [`supabase/migrations/005_paid_by_and_guest_claim.sql`](supabase/migrations/005_paid_by_and_guest_claim.sql) (who paid + guest claim)
+6. [`supabase/migrations/006_payment_methods.sql`](supabase/migrations/006_payment_methods.sql) (where to pay / payout details)
+7. [`supabase/migrations/007_payment_qr_storage.sql`](supabase/migrations/007_payment_qr_storage.sql) (payment QR uploads)
 
 This creates tables, RLS policies, triggers, invite RPCs, realtime publication, and storage buckets (`avatars`, `receipts`, `ocr-json`).
 

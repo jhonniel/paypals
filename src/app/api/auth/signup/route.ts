@@ -4,11 +4,13 @@ import { cookies } from "next/headers";
 import { fromZod, fail, ok, tooManyRequests } from "@/lib/api";
 import { publicEnv } from "@/lib/env";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { safeRedirectPath } from "@/lib/security";
 
 const schema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   fullName: z.string().min(2),
+  inviteCode: z.string().min(4).max(64),
 });
 
 export async function POST(request: Request) {
@@ -51,19 +53,61 @@ export async function POST(request: Request) {
     },
   });
 
+  const { data: validation, error: validateError } = await supabase.rpc(
+    "validate_signup_invite",
+    { p_code: parsed.data.inviteCode }
+  );
+
+  if (validateError) return fail(validateError.message, 400);
+  const invite = validation as { valid?: boolean; kind?: string; group_id?: string; label?: string };
+  if (!invite?.valid) {
+    return fail("A valid invite code is required to create an account", 403, "INVITE_REQUIRED");
+  }
+
+  const nextPath =
+    invite.kind === "group" && invite.group_id
+      ? `/groups/${invite.group_id}`
+      : "/dashboard";
+
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
     password: parsed.data.password,
     options: {
-      data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${publicEnv.appUrl}/auth/callback?next=/dashboard`,
+      data: {
+        full_name: parsed.data.fullName,
+        invite_code: parsed.data.inviteCode.trim(),
+      },
+      emailRedirectTo: `${publicEnv.appUrl}/auth/callback?next=${encodeURIComponent(nextPath)}&invite=${encodeURIComponent(parsed.data.inviteCode.trim())}`,
     },
   });
 
   if (error) return fail(error.message, 400, "SIGNUP_FAILED");
 
+  let redeemed = false;
+  let groupId: string | null = invite.group_id ?? null;
+
+  if (data.session) {
+    const { data: redeemResult, error: redeemError } = await supabase.rpc(
+      "redeem_signup_invite",
+      { p_code: parsed.data.inviteCode }
+    );
+    if (redeemError) {
+      console.error(redeemError);
+    } else {
+      const r = redeemResult as { ok?: boolean; group_id?: string };
+      redeemed = Boolean(r?.ok);
+      if (r?.group_id) groupId = r.group_id;
+    }
+  }
+
   return ok({
     user: data.user ? { id: data.user.id, email: data.user.email } : null,
     needsConfirmation: !data.session,
+    redeemed,
+    groupId,
+    redirectTo: safeRedirectPath(
+      groupId ? `/groups/${groupId}` : "/dashboard",
+      "/dashboard"
+    ),
   });
 }

@@ -11,14 +11,25 @@ import { Button } from "@/components/ui/button";
 export function GoogleButton({
   next = "/dashboard",
   label = "Continue with Google",
+  inviteCode,
+  disabled = false,
 }: {
   next?: string;
   label?: string;
+  inviteCode?: string;
+  disabled?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
-  const safeNext = safeRedirectPath(next, "/dashboard");
+  const safeNext = safeRedirectPath(
+    next.startsWith("/auth/callback") ? "/dashboard" : next,
+    "/dashboard"
+  );
 
   async function handleGoogle() {
+    if (disabled) {
+      toast.error("Enter a valid invite code first");
+      return;
+    }
     if (!publicEnv.isConfigured) {
       toast.error("Supabase is not configured. Add env vars to .env.local");
       return;
@@ -26,10 +37,20 @@ export function GoogleButton({
 
     setLoading(true);
     const supabase = createClient();
+
+    const callbackParams = new URLSearchParams();
+    callbackParams.set("next", safeNext);
+    if (inviteCode && inviteCode.length >= 4) {
+      callbackParams.set("invite", inviteCode);
+    }
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${publicEnv.appUrl}/auth/callback?next=${encodeURIComponent(safeNext)}`,
+        redirectTo: `${publicEnv.appUrl}/auth/callback?${callbackParams.toString()}`,
+        queryParams: inviteCode
+          ? undefined
+          : undefined,
       },
     });
 
@@ -44,8 +65,8 @@ export function GoogleButton({
       type="button"
       variant="outline"
       className="w-full"
-      onClick={handleGoogle}
-      disabled={loading}
+      onClick={() => void handleGoogle()}
+      disabled={loading || disabled}
     >
       {loading ? (
         <Loader2 className="animate-spin" />

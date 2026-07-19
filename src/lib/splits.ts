@@ -297,3 +297,18 @@ export function computeSplitBalances(
     unassignedTotal: unassignedWithAdj,
   };
 }
+
+/** Given who paid the bill, how much each other member owes that payer. */
+export function computeOwesToPayer(
+  summary: SplitSummary,
+  paidByMemberId: string | null | undefined
+): Array<{ fromMemberId: string; toMemberId: string; amount: number }> {
+  if (!paidByMemberId) return [];
+  return summary.members
+    .filter((m) => m.memberId !== paidByMemberId && m.total > 0)
+    .map((m) => ({
+      fromMemberId: m.memberId,
+      toMemberId: paidByMemberId,
+      amount: m.total,
+    }));
+}

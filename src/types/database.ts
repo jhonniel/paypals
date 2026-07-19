@@ -31,6 +31,17 @@ export type NotificationType =
   | "split_completed"
   | "payment_reminder";
 
+export type PaymentMethodType = "gcash" | "maya" | "bank" | "other";
+
+export interface PaymentMethod {
+  id: string;
+  type: PaymentMethodType;
+  bank_name: string;
+  account_name: string;
+  account_number: string;
+  qr_code_url: string | null;
+}
+
 export interface Profile {
   id: string;
   email: string | null;
@@ -39,6 +50,8 @@ export interface Profile {
   avatar_url: string | null;
   bio: string | null;
   is_admin: boolean;
+  invite_verified?: boolean;
+  payment_methods?: PaymentMethod[];
   created_at: string;
   updated_at: string;
 }
@@ -95,6 +108,8 @@ export interface Receipt {
   total: number;
   status: ReceiptStatus;
   notes: string | null;
+  settlement_note?: string | null;
+  paid_by_member_id?: string | null;
   ocr_confidence: number | null;
   created_at: string;
   updated_at: string;

@@ -91,7 +91,7 @@ export async function DELETE() {
     // Remove storage objects under user prefixes
     try {
       const admin = createAdminClient();
-      for (const bucket of ["avatars", "receipts", "ocr-json"] as const) {
+      for (const bucket of ["avatars", "receipts", "ocr-json", "payment-qr"] as const) {
         const { data: files } = await admin.storage.from(bucket).list(user.id, {
           limit: 1000,
         });
