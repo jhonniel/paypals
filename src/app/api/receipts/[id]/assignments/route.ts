@@ -69,12 +69,18 @@ export async function GET(_req: Request, { params }: Params) {
         ),
     }));
 
-    const summary = computeSplitBalances(splitItems, {
-      tax: Number(receipt.tax),
-      discount: Number(receipt.discount),
-      serviceCharge: Number(receipt.service_charge),
-      tip: Number(receipt.tip),
-    });
+    const summary = computeSplitBalances(
+      splitItems,
+      {
+        tax: Number(receipt.tax),
+        discount: Number(receipt.discount),
+        serviceCharge: Number(receipt.service_charge),
+        tip: Number(receipt.tip),
+      },
+      {
+        equalServiceChargeMemberIds: members.map((m) => String(m.id)),
+      }
+    );
 
     return ok({
       receipt,
@@ -124,8 +130,90 @@ export async function PUT(request: Request, { params }: Params) {
 
     if (!receipt) return notFound("Receipt not found");
 
+    const isCreator = receipt.created_by === user.id;
+    let myMemberId: string | null = null;
+
+    if (receipt.group_id) {
+      const { data: membership } = await supabase
+        .from("group_members")
+        .select("id")
+        .eq("group_id", receipt.group_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      myMemberId = membership?.id ?? null;
+      if (!isCreator && !myMemberId) {
+        return fail("You are not a member of this group", 403);
+      }
+    } else if (!isCreator) {
+      return fail("Only the receipt owner can update assignments", 403);
+    }
+
+    // Non-creators may only claim/unclaim their own items — never change
+    // group link, payer, settlement note, or other people's claims.
+    if (!isCreator) {
+      if (!myMemberId) return fail("Join the group first", 403);
+
+      const { data: items } = await supabase
+        .from("receipt_items")
+        .select("id")
+        .eq("receipt_id", id);
+      const itemIds = (items ?? []).map((i) => i.id);
+      if (!itemIds.length) return ok({ saved: true });
+
+      const { data: existing } = await supabase
+        .from("receipt_item_assignments")
+        .select(
+          "receipt_item_id, member_id, split_method, share_percentage, share_quantity, share_amount"
+        )
+        .in("receipt_item_id", itemIds);
+
+      const others = (existing ?? []).filter((a) => a.member_id !== myMemberId);
+      const mine = parsed.data.assignments.filter((a) => a.member_id === myMemberId);
+
+      await supabase
+        .from("receipt_item_assignments")
+        .delete()
+        .in("receipt_item_id", itemIds);
+
+      const merged = [
+        ...others.map((a) => ({
+          receipt_item_id: a.receipt_item_id,
+          member_id: a.member_id,
+          split_method: a.split_method,
+          share_percentage: a.share_percentage,
+          share_quantity: a.share_quantity,
+          share_amount: a.share_amount,
+        })),
+        ...mine,
+      ];
+
+      if (merged.length) {
+        const { error } = await supabase
+          .from("receipt_item_assignments")
+          .insert(merged);
+        if (error) return fail(error.message, 400);
+      }
+
+      await supabase
+        .from("receipts")
+        .update({ status: "members_assigned" })
+        .eq("id", id);
+
+      return ok({ saved: true, claimed: true });
+    }
+
     const receiptPatch: Record<string, unknown> = {};
     if (parsed.data.group_id !== undefined) {
+      if (parsed.data.group_id) {
+        const { data: group } = await supabase
+          .from("groups")
+          .select("created_by")
+          .eq("id", parsed.data.group_id)
+          .maybeSingle();
+        if (!group || group.created_by !== user.id) {
+          return fail("Only the group creator can link receipts here", 403);
+        }
+      }
       receiptPatch.group_id = parsed.data.group_id;
     }
     if (parsed.data.paid_by_member_id !== undefined) {
@@ -138,7 +226,8 @@ export async function PUT(request: Request, { params }: Params) {
       const { error: gErr } = await supabase
         .from("receipts")
         .update(receiptPatch)
-        .eq("id", id);
+        .eq("id", id)
+        .eq("created_by", user.id);
       if (gErr) return fail(gErr.message, 400);
     }
 

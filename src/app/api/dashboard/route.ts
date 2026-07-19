@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { ok, unauthorized, serverError } from "@/lib/api";
+import { computeOwedToYou } from "@/lib/owed-to-you";
 
 export async function GET() {
   try {
@@ -27,6 +28,7 @@ export async function GET() {
       activitiesRes,
       monthlyRes,
       notificationsRes,
+      owedToYou,
     ] = await Promise.all([
       supabase
         .from("receipts")
@@ -60,6 +62,7 @@ export async function GET() {
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id)
         .is("read_at", null),
+      computeOwedToYou(supabase, user.id),
     ]);
 
     const monthlySpend = (monthlyRes.data ?? []).reduce(
@@ -118,11 +121,13 @@ export async function GET() {
         friendsCount: friendsRes.count ?? 0,
         unreadNotifications: notificationsRes.count ?? 0,
         mostActiveGroup: groups[0]?.name ?? null,
+        totalOwedToYou: owedToYou.totalOwed,
       },
       recentReceipts: receiptsRes.data ?? [],
       groups,
       activities: activitiesRes.data ?? [],
       monthlyChart: months,
+      owedToYou: owedToYou.rows,
     });
   } catch (error) {
     console.error(error);

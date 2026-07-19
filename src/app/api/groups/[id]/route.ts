@@ -37,12 +37,85 @@ export async function GET(_req: Request, { params }: Params) {
 
     const my = (members ?? []).find((m) => m.user_id === user.id);
 
+    const { data: receipts } = await supabase
+      .from("receipts")
+      .select(
+        `id, merchant, total, currency, status, receipt_date, receipt_time,
+         subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
+         receipt_items(id, name, quantity, unit_price, total_price, sort_order),
+         receipt_images(id),
+         profiles:created_by(full_name, username)`
+      )
+      .eq("group_id", id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    const detailed = (receipts ?? []).map((r) => {
+      const profile = Array.isArray(r.profiles) ? r.profiles[0] : r.profiles;
+      const items = [...(r.receipt_items ?? [])].sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+      );
+      return {
+        id: r.id,
+        merchant: r.merchant,
+        total: r.total,
+        currency: r.currency,
+        status: r.status,
+        receipt_date: r.receipt_date,
+        receipt_time: r.receipt_time,
+        subtotal: r.subtotal,
+        tax: r.tax,
+        discount: r.discount,
+        service_charge: r.service_charge,
+        tip: r.tip,
+        notes: r.notes,
+        created_at: r.created_at,
+        created_by: r.created_by,
+        uploaded_by:
+          profile?.full_name || profile?.username || "Member",
+        has_image: (r.receipt_images?.length ?? 0) > 0,
+        image_url: (r.receipt_images?.length ?? 0) > 0 ? `/api/receipts/${r.id}/image` : null,
+        items: items.map((i) => ({
+          id: i.id,
+          name: i.name,
+          quantity: Number(i.quantity),
+          unit_price: Number(i.unit_price),
+          total_price: Number(i.total_price),
+        })),
+      };
+    });
+
+    const isCreator = group.created_by === user.id;
+    let pending_claim_receipts: typeof detailed = [];
+
+    // Non-creators must confirm picks on each receipt before viewing the group
+    if (!isCreator && my && detailed.length) {
+      const withItems = detailed.filter((r) => r.items.length > 0);
+      const receiptIds = withItems.map((r) => r.id);
+      if (receiptIds.length) {
+        const { data: confirmed } = await supabase
+          .from("receipt_history")
+          .select("receipt_id")
+          .eq("user_id", user.id)
+          .eq("event", "claims_confirmed")
+          .in("receipt_id", receiptIds);
+
+        const confirmedSet = new Set((confirmed ?? []).map((c) => c.receipt_id));
+        pending_claim_receipts = withItems.filter((r) => !confirmedSet.has(r.id));
+      }
+    }
+
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
     return ok({
       group,
       members: members ?? [],
+      receipts: detailed,
       my_role: my?.role ?? null,
+      my_member_id: my?.id ?? null,
+      pending_claim_receipts,
+      must_claim_before_view:
+        !isCreator && pending_claim_receipts.length > 0,
       invite_url: `${appUrl}/invite/${group.invite_code}`,
     });
   } catch (e) {

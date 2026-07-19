@@ -64,11 +64,20 @@ export async function POST(request: Request, { params }: Params) {
         guest_name: guestName,
         role,
         invite_token: userId ? null : inviteToken,
+        invited_by: user.id,
       })
       .select("*")
       .single();
 
     if (error) return fail(error.message, 400);
+
+    // Adding an existing account → auto-friend with the inviter
+    if (userId && userId !== user.id) {
+      await supabase.rpc("ensure_accepted_friendship", {
+        p_inviter: user.id,
+        p_invitee: userId,
+      });
+    }
 
     const { data: group } = await supabase
       .from("groups")

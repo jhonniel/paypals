@@ -62,6 +62,24 @@ export async function POST(request: Request) {
     }
     const file = fileEntry as Blob;
 
+    const groupIdRaw = form.get("group_id");
+    const groupId =
+      typeof groupIdRaw === "string" && groupIdRaw.trim().length > 0
+        ? groupIdRaw.trim()
+        : null;
+
+    if (groupId) {
+      const { data: group } = await supabase
+        .from("groups")
+        .select("id, created_by")
+        .eq("id", groupId)
+        .maybeSingle();
+      if (!group) return fail("Group not found", 404);
+      if (group.created_by !== user.id) {
+        return fail("Only the group creator can upload receipts to this group", 403);
+      }
+    }
+
     const fileName =
       file instanceof File && file.name ? file.name : `receipt-${Date.now()}.jpg`;
     const mime = normalizeMime(file.type, fileName);
@@ -91,6 +109,7 @@ export async function POST(request: Request) {
     const { error: receiptError } = await supabase.from("receipts").insert({
       id: receiptId,
       created_by: user.id,
+      group_id: groupId,
       currency,
       status: "uploaded",
       merchant: null,

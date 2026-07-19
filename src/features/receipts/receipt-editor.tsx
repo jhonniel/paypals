@@ -51,6 +51,7 @@ type ReceiptPayload = {
     status: string;
     notes: string | null;
     ocr_confidence: number | null;
+    group_id: string | null;
   };
   items: Array<{
     id: string;
@@ -61,7 +62,7 @@ type ReceiptPayload = {
     sort_order: number;
   }>;
   imageUrl: string | null;
-  history: Array<{ id: string; event: string; created_at: string }>;
+  canEdit: boolean;
 };
 
 function uid() {
@@ -87,7 +88,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [showEnhanced, setShowEnhanced] = useState(false);
   const [items, setItems] = useState<EditorItem[]>([]);
-  const [history, setHistory] = useState<ReceiptPayload["history"]>([]);
+  const [canEdit, setCanEdit] = useState(true);
+  const [groupId, setGroupId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -108,7 +110,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       setStatus(data.receipt.status);
       setConfidence(data.receipt.ocr_confidence);
       setImageUrl(data.imageUrl);
-      setHistory(data.history ?? []);
+      setCanEdit(data.canEdit !== false);
+      setGroupId(data.receipt.group_id ?? null);
       setItems(
         (data.items ?? []).map((i) => ({
           key: i.id,
@@ -226,6 +229,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   }
 
   async function save(finalize = false) {
+    if (!canEdit) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/receipts/${receiptId}`, {
@@ -264,6 +268,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   }
 
   async function rerunOcr() {
+    if (!canEdit) return;
     setReocr(true);
     try {
       const res = await fetch(`/api/ocr/${receiptId}`, { method: "POST" });
@@ -292,10 +297,11 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <Link
-            href="/receipts"
+            href={groupId ? `/groups/${groupId}` : "/receipts"}
             className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" /> All receipts
+            <ArrowLeft className="h-4 w-4" />{" "}
+            {groupId ? "Back to group" : "All receipts"}
           </Link>
           <h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">
             {merchant || "Untitled receipt"}
@@ -303,21 +309,29 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           <p className="mt-1 text-sm capitalize text-muted-foreground">
             {status.replaceAll("_", " ")}
             {confidence != null ? ` · OCR ${confidence}%` : ""}
+            {!canEdit ? " · View only" : ""}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => void rerunOcr()} disabled={reocr}>
-            {reocr ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            Re-run OCR
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void save(false)} disabled={saving}>
-            {saving ? <Loader2 className="animate-spin" /> : <Save />}
-            Save
-          </Button>
-          <Button size="sm" onClick={() => void save(true)} disabled={saving}>
-            <CheckCircle2 /> Finalize
-          </Button>
-        </div>
+        {canEdit ? (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => void rerunOcr()} disabled={reocr}>
+              {reocr ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              Re-run OCR
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void save(false)} disabled={saving}>
+              {saving ? <Loader2 className="animate-spin" /> : <Save />}
+              Save
+            </Button>
+            <Button size="sm" onClick={() => void save(true)} disabled={saving}>
+              <CheckCircle2 /> Finalize
+            </Button>
+          </div>
+        ) : (
+          <p className="max-w-xs text-sm text-muted-foreground">
+            Only the person who uploaded this receipt can edit line items. You can still view the
+            image and claim your share below.
+          </p>
+        )}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
@@ -333,6 +347,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   id="merchant"
                   value={merchant}
                   onChange={(e) => setMerchant(e.target.value)}
+                  readOnly={!canEdit}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="space-y-2">
@@ -342,6 +358,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
+                  readOnly={!canEdit}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="space-y-2">
@@ -351,6 +369,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   type="time"
                   value={time}
                   onChange={(e) => setTime(e.target.value)}
+                  readOnly={!canEdit}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="space-y-2 sm:col-span-2">
@@ -360,6 +380,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   rows={2}
+                  readOnly={!canEdit}
+                  disabled={!canEdit}
                 />
               </div>
             </CardContent>
@@ -369,29 +391,35 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
             <CardHeader className="flex flex-col gap-3 space-y-0 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
               <div>
                 <CardTitle className="text-base sm:text-lg">Line items</CardTitle>
-                <CardDescription>Edit OCR mistakes — totals update instantly</CardDescription>
+                <CardDescription>
+                  {canEdit
+                    ? "Edit OCR mistakes — totals update instantly"
+                    : "View only — the uploader manages line items"}
+                </CardDescription>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={addItem}>
-                  <Plus /> Add
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={mergeSelected}>
-                  <Merge /> Merge
-                </Button>
-                <Button type="button" size="sm" variant="outline" onClick={splitSelected}>
-                  <Split /> Split
-                </Button>
-                <Button type="button" size="sm" variant="destructive" onClick={deleteSelected}>
-                  <Trash2 /> Delete
-                </Button>
-              </div>
+              {canEdit && (
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={addItem}>
+                    <Plus /> Add
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={mergeSelected}>
+                    <Merge /> Merge
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={splitSelected}>
+                    <Split /> Split
+                  </Button>
+                  <Button type="button" size="sm" variant="destructive" onClick={deleteSelected}>
+                    <Trash2 /> Delete
+                  </Button>
+                </div>
+              )}
             </CardHeader>
             <CardContent className="p-0 sm:p-0">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] text-sm">
                   <thead>
                     <tr className="border-y border-border bg-muted/40 text-left text-xs text-muted-foreground">
-                      <th className="w-10 px-3 py-2" />
+                      {canEdit && <th className="w-10 px-3 py-2" />}
                       <th className="px-3 py-2 font-medium">Item</th>
                       <th className="w-24 px-3 py-2 font-medium">Qty</th>
                       <th className="w-28 px-3 py-2 font-medium">Price</th>
@@ -401,8 +429,13 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
-                          No items — add one or re-run OCR.
+                        <td
+                          colSpan={canEdit ? 5 : 4}
+                          className="px-4 py-10 text-center text-muted-foreground"
+                        >
+                          {canEdit
+                            ? "No items — add one or re-run OCR."
+                            : "No line items on this receipt yet."}
                         </td>
                       </tr>
                     ) : (
@@ -414,68 +447,90 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                             item.selected && "bg-accent/30"
                           )}
                         >
+                          {canEdit && (
+                            <td className="px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(item.selected)}
+                                onChange={(e) =>
+                                  updateItem(item.key, { selected: e.target.checked }, false)
+                                }
+                                aria-label={`Select ${item.name}`}
+                              />
+                            </td>
+                          )}
                           <td className="px-3 py-2">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(item.selected)}
-                              onChange={(e) =>
-                                updateItem(item.key, { selected: e.target.checked }, false)
-                              }
-                              aria-label={`Select ${item.name}`}
-                            />
+                            {canEdit ? (
+                              <Input
+                                value={item.name}
+                                onChange={(e) =>
+                                  updateItem(item.key, { name: e.target.value }, false)
+                                }
+                                className="h-9"
+                              />
+                            ) : (
+                              <span className="block py-2 font-medium">{item.name}</span>
+                            )}
                           </td>
                           <td className="px-3 py-2">
-                            <Input
-                              value={item.name}
-                              onChange={(e) =>
-                                updateItem(item.key, { name: e.target.value }, false)
-                              }
-                              className="h-9"
-                            />
+                            {canEdit ? (
+                              <Input
+                                type="number"
+                                step="0.001"
+                                min="0.001"
+                                value={item.quantity}
+                                onChange={(e) =>
+                                  updateItem(item.key, {
+                                    quantity: Number(e.target.value) || 0,
+                                  })
+                                }
+                                className="h-9"
+                              />
+                            ) : (
+                              <span className="tabular-nums">{item.quantity}</span>
+                            )}
                           </td>
                           <td className="px-3 py-2">
-                            <Input
-                              type="number"
-                              step="0.001"
-                              min="0.001"
-                              value={item.quantity}
-                              onChange={(e) =>
-                                updateItem(item.key, {
-                                  quantity: Number(e.target.value) || 0,
-                                })
-                              }
-                              className="h-9"
-                            />
+                            {canEdit ? (
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.unit_price}
+                                onChange={(e) =>
+                                  updateItem(item.key, {
+                                    unit_price: Number(e.target.value) || 0,
+                                  })
+                                }
+                                className="h-9"
+                              />
+                            ) : (
+                              <span className="tabular-nums">
+                                {formatPHP(item.unit_price, currency)}
+                              </span>
+                            )}
                           </td>
                           <td className="px-3 py-2">
-                            <Input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={item.unit_price}
-                              onChange={(e) =>
-                                updateItem(item.key, {
-                                  unit_price: Number(e.target.value) || 0,
-                                })
-                              }
-                              className="h-9"
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <Input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={item.total_price}
-                              onChange={(e) =>
-                                updateItem(
-                                  item.key,
-                                  { total_price: Number(e.target.value) || 0 },
-                                  false
-                                )
-                              }
-                              className="h-9"
-                            />
+                            {canEdit ? (
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.total_price}
+                                onChange={(e) =>
+                                  updateItem(
+                                    item.key,
+                                    { total_price: Number(e.target.value) || 0 },
+                                    false
+                                  )
+                                }
+                                className="h-9"
+                              />
+                            ) : (
+                              <span className="font-medium tabular-nums">
+                                {formatPHP(item.total_price, currency)}
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))
@@ -524,37 +579,41 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
             </Card>
           )}
 
-          <Card>
-            <CardHeader className="p-4">
-              <CardTitle className="text-base">Adjustments</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 p-4 pt-0">
-              {(
-                [
-                  ["Tax / VAT", tax, setTax],
-                  ["Discount", discount, setDiscount],
-                  ["Service charge", serviceCharge, setServiceCharge],
-                  ["Tip", tip, setTip],
-                ] as const
-              ).map(([label, value, setter]) => (
-                <div key={label} className="space-y-1.5">
-                  <Label>{label}</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={value}
-                    onChange={(e) => setter(Number(e.target.value) || 0)}
-                  />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          {canEdit && (
+            <Card>
+              <CardHeader className="p-4">
+                <CardTitle className="text-base">Adjustments</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-3 p-4 pt-0">
+                {(
+                  [
+                    ["Tax / VAT", tax, setTax],
+                    ["Discount", discount, setDiscount],
+                    ["Service charge", serviceCharge, setServiceCharge],
+                    ["Tip", tip, setTip],
+                  ] as const
+                ).map(([label, value, setter]) => (
+                  <div key={label} className="space-y-1.5">
+                    <Label>{label}</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={value}
+                      onChange={(e) => setter(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="p-4">
               <CardTitle className="text-base">Totals</CardTitle>
-              <CardDescription>Decimal-safe calculation</CardDescription>
+              <CardDescription>
+                {canEdit ? "Decimal-safe calculation" : "From the uploaded receipt"}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 p-4 pt-0 text-sm">
               <Row label="Items" value={formatPHP(totals.itemsSubtotal, currency)} />
@@ -568,22 +627,6 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
               </div>
             </CardContent>
           </Card>
-
-          {history.length > 0 && (
-            <Card>
-              <CardHeader className="p-4">
-                <CardTitle className="text-base">Timeline</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 p-4 pt-0 text-xs text-muted-foreground">
-                {history.map((h) => (
-                  <div key={h.id} className="flex justify-between gap-2">
-                    <span className="capitalize">{h.event.replaceAll("_", " ")}</span>
-                    <span>{new Date(h.created_at).toLocaleString()}</span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
     </div>

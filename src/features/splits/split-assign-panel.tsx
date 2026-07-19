@@ -84,7 +84,7 @@ export function SplitAssignPanel({
       const res = await fetch("/api/groups");
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message);
-      return json.data as Array<{ id: string; name: string }>;
+      return json.data as Array<{ id: string; name: string; created_by?: string }>;
     },
   });
 
@@ -96,6 +96,7 @@ export function SplitAssignPanel({
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       return json.data as {
         receipt: {
+          created_by?: string;
           group_id: string | null;
           paid_by_member_id?: string | null;
           settlement_note?: string | null;
@@ -118,6 +119,15 @@ export function SplitAssignPanel({
     return data.members.find((m) => m.user_id === currentUserId)?.id ?? null;
   }, [data, currentUserId]);
 
+  const canManageSplit = Boolean(
+    currentUserId && data?.receipt.created_by === currentUserId
+  );
+
+  const creatableGroups = useMemo(() => {
+    if (!groups || !currentUserId) return groups ?? [];
+    return groups.filter((g) => !g.created_by || g.created_by === currentUserId);
+  }, [groups, currentUserId]);
+
   useEffect(() => {
     if (!data) return;
     if (data.receipt.group_id) setGroupId(data.receipt.group_id);
@@ -133,6 +143,10 @@ export function SplitAssignPanel({
     }
     setLocalAssignments(map);
   }, [data]);
+
+  useEffect(() => {
+    if (!canManageSplit) setMode("claim");
+  }, [canManageSplit]);
 
   const liveSummary = useMemo(() => {
     if (!data) return null;
@@ -160,12 +174,18 @@ export function SplitAssignPanel({
         assignments,
       };
     });
-    return computeSplitBalances(items, {
-      tax: Number(data.receipt.tax),
-      discount: Number(data.receipt.discount),
-      serviceCharge: Number(data.receipt.service_charge),
-      tip: Number(data.receipt.tip),
-    });
+    return computeSplitBalances(
+      items,
+      {
+        tax: Number(data.receipt.tax),
+        discount: Number(data.receipt.discount),
+        serviceCharge: Number(data.receipt.service_charge),
+        tip: Number(data.receipt.tip),
+      },
+      {
+        equalServiceChargeMemberIds: data.members.map((m) => m.id),
+      }
+    );
   }, [data, localAssignments, method]);
 
   const owes = useMemo(() => {
@@ -183,12 +203,93 @@ export function SplitAssignPanel({
     });
   }
 
+  function buildAssignments(
+    map: Record<string, string[]>,
+    onlyMemberId?: string | null
+  ): AssignmentRow[] {
+    if (!data) return [];
+    const assignments: AssignmentRow[] = [];
+    for (const item of data.items) {
+      const memberIds = map[item.id] ?? [];
+      for (const memberId of memberIds) {
+        if (onlyMemberId && memberId !== onlyMemberId) continue;
+        assignments.push({
+          receipt_item_id: item.id,
+          member_id: memberId,
+          split_method: method,
+          share_percentage:
+            method === "percentage" ? 100 / Math.max(memberIds.length, 1) : null,
+          share_quantity:
+            method === "quantity"
+              ? Number(item.quantity) / Math.max(memberIds.length, 1)
+              : null,
+          share_amount:
+            method === "custom"
+              ? Number(item.total_price) / Math.max(memberIds.length, 1)
+              : null,
+        });
+      }
+    }
+    return assignments;
+  }
+
+  async function persistAssignments(
+    map: Record<string, string[]>,
+    opts?: { quiet?: boolean; claimed?: boolean }
+  ) {
+    if (!data) return;
+    setSaving(true);
+    try {
+      const body = canManageSplit
+        ? {
+            group_id: groupId || null,
+            paid_by_member_id: paidByMemberId || null,
+            settlement_note: settlementNote.trim() || null,
+            assignments: buildAssignments(map),
+          }
+        : {
+            assignments: buildAssignments(map, myMemberId),
+          };
+
+      const res = await fetch(`/api/receipts/${receiptId}/assignments`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Save failed");
+      if (!opts?.quiet) {
+        toast.success(canManageSplit ? "Split saved" : "Saved");
+      } else if (opts.claimed !== undefined) {
+        toast.success(opts.claimed ? "Claimed" : "Unclaimed");
+      }
+      await qc.invalidateQueries({ queryKey: ["assignments", receiptId] });
+      if (groupId) {
+        await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+      await qc.invalidateQueries({ queryKey: ["assignments", receiptId] });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function claimItem(itemId: string) {
     if (!myMemberId) {
       toast.error("Join the group on this receipt first");
       return;
     }
-    toggleMember(itemId, myMemberId);
+    setLocalAssignments((prev) => {
+      const cur = prev[itemId] ?? [];
+      const claimed = !cur.includes(myMemberId);
+      const next = claimed
+        ? [...cur, myMemberId]
+        : cur.filter((id) => id !== myMemberId);
+      const nextMap = { ...prev, [itemId]: next };
+      void persistAssignments(nextMap, { quiet: true, claimed });
+      return nextMap;
+    });
   }
 
   function assignAllToEveryone() {
@@ -201,51 +302,34 @@ export function SplitAssignPanel({
     setLocalAssignments(map);
   }
 
-  async function save() {
-    if (!data) return;
-    setSaving(true);
+  async function linkGroup(nextGroupId: string) {
+    if (!canManageSplit) return;
+    setGroupId(nextGroupId);
+    setPaidByMemberId("");
     try {
-      const assignments: AssignmentRow[] = [];
-      for (const item of data.items) {
-        const memberIds = localAssignments[item.id] ?? [];
-        for (const memberId of memberIds) {
-          assignments.push({
-            receipt_item_id: item.id,
-            member_id: memberId,
-            split_method: method,
-            share_percentage:
-              method === "percentage" ? 100 / Math.max(memberIds.length, 1) : null,
-            share_quantity:
-              method === "quantity"
-                ? Number(item.quantity) / Math.max(memberIds.length, 1)
-                : null,
-            share_amount:
-              method === "custom"
-                ? Number(item.total_price) / Math.max(memberIds.length, 1)
-                : null,
-          });
-        }
-      }
-
-      const res = await fetch(`/api/receipts/${receiptId}/assignments`, {
-        method: "PUT",
+      const res = await fetch(`/api/receipts/${receiptId}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          group_id: groupId || null,
-          paid_by_member_id: paidByMemberId || null,
-          settlement_note: settlementNote.trim() || null,
-          assignments,
-        }),
+        body: JSON.stringify({ group_id: nextGroupId || null }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Save failed");
-      toast.success("Split saved");
+      if (!res.ok) throw new Error(json?.error?.message ?? "Could not link group");
+      toast.success(
+        nextGroupId
+          ? "Receipt linked to group — details appear on the group page"
+          : "Receipt unlinked from group"
+      );
       await qc.invalidateQueries({ queryKey: ["assignments", receiptId] });
+      if (nextGroupId) {
+        await qc.invalidateQueries({ queryKey: ["group", nextGroupId] });
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSaving(false);
+      toast.error(err instanceof Error ? err.message : "Could not link group");
     }
+  }
+
+  async function save() {
+    await persistAssignments(localAssignments);
   }
 
   if (isLoading || !data) {
@@ -273,50 +357,60 @@ export function SplitAssignPanel({
   }
 
   return (
-    <Card>
+    <Card id="split">
       <CardHeader className="p-4 sm:p-6">
-        <CardTitle className="text-base sm:text-lg">Split the bill</CardTitle>
+        <CardTitle className="text-base sm:text-lg">
+          {canManageSplit ? "Split the bill" : "Pick what you got"}
+        </CardTitle>
         <CardDescription>
-          Tap what you ordered. Choose who paid so everyone knows whom — and where — to
-          pay back.
+          {canManageSplit
+            ? "Tap what you ordered. Choose who paid so everyone knows whom — and where — to pay back."
+            : "Tap each item you ordered. Your picks save automatically."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Group</Label>
-            <select
-              className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
-              value={groupId}
-              onChange={(e) => setGroupId(e.target.value)}
-            >
-              <option value="">Select a group…</option>
-              {(groups ?? []).map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
+        {canManageSplit ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Group</Label>
+              <select
+                className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
+                value={groupId}
+                onChange={(e) => void linkGroup(e.target.value)}
+              >
+                <option value="">Select a group…</option>
+                {creatableGroups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Who paid the bill?</Label>
+              <select
+                className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
+                value={paidByMemberId}
+                onChange={(e) => setPaidByMemberId(e.target.value)}
+                disabled={!groupId || data.members.length === 0}
+              >
+                <option value="">Select payer…</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {memberLabel(m)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label>Who paid the bill?</Label>
-            <select
-              className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
-              value={paidByMemberId}
-              onChange={(e) => setPaidByMemberId(e.target.value)}
-              disabled={!groupId || data.members.length === 0}
-            >
-              <option value="">Select payer…</option>
-              {data.members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {memberLabel(m)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+        ) : groupId && paidByMemberId ? (
+          <p className="text-sm text-muted-foreground">
+            Paying back {payer ? memberLabel(payer) : "the payer"}
+            {settlementNote.trim() ? ` · ${settlementNote.trim()}` : ""}
+          </p>
+        ) : null}
 
-        {paidByMemberId && (
+        {canManageSplit && paidByMemberId && (
           <div className="space-y-2">
             <Label htmlFor="settlement-note">Where to pay (this bill)</Label>
             <Input
@@ -335,48 +429,53 @@ export function SplitAssignPanel({
 
         {!groupId || data.members.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Link a group with members first. Add friends or invite guests from the group
-            page, then come back.
+            {canManageSplit
+              ? "Link a group with members first. Add friends or invite guests from the group page, then come back."
+              : "This receipt isn’t linked to a group yet. Ask the group creator to upload or link it."}
           </p>
         ) : (
           <>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={mode === "claim" ? "default" : "outline"}
-                onClick={() => setMode("claim")}
-              >
-                <Hand className="h-3.5 w-3.5" />
-                Tap what I got
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={mode === "assign" ? "default" : "outline"}
-                onClick={() => setMode("assign")}
-              >
-                Assign for everyone
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={assignAllToEveryone}>
-                Share all equally
-              </Button>
-            </div>
+            {canManageSplit && (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={mode === "claim" ? "default" : "outline"}
+                    onClick={() => setMode("claim")}
+                  >
+                    <Hand className="h-3.5 w-3.5" />
+                    Tap what I got
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={mode === "assign" ? "default" : "outline"}
+                    onClick={() => setMode("assign")}
+                  >
+                    Assign for everyone
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={assignAllToEveryone}>
+                    Share all equally
+                  </Button>
+                </div>
 
-            <div className="space-y-2">
-              <Label>Split method (when shared)</Label>
-              <select
-                className="flex h-11 w-full max-w-xs rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
-                value={method}
-                onChange={(e) => setMethod(e.target.value as SplitMethod)}
-              >
-                <option value="equal">Equal</option>
-                <option value="percentage">Percentage</option>
-                <option value="quantity">By quantity</option>
-                <option value="weighted">Weighted</option>
-                <option value="custom">Custom amount</option>
-              </select>
-            </div>
+                <div className="space-y-2">
+                  <Label>Split method (when shared)</Label>
+                  <select
+                    className="flex h-11 w-full max-w-xs rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
+                    value={method}
+                    onChange={(e) => setMethod(e.target.value as SplitMethod)}
+                  >
+                    <option value="equal">Equal</option>
+                    <option value="percentage">Percentage</option>
+                    <option value="quantity">By quantity</option>
+                    <option value="weighted">Weighted</option>
+                    <option value="custom">Custom amount</option>
+                  </select>
+                </div>
+              </>
+            )}
 
             {mode === "claim" && !myMemberId && (
               <p className="text-sm text-amber-600 dark:text-amber-400">
@@ -395,9 +494,11 @@ export function SplitAssignPanel({
                       onClick={() =>
                         mode === "claim" ? claimItem(item.id) : undefined
                       }
+                      disabled={mode === "claim" && saving}
                       className={cn(
                         "mb-2 flex w-full items-center justify-between gap-2 text-left text-sm",
-                        mode === "claim" && "rounded-xl p-1 transition hover:bg-muted/50"
+                        mode === "claim" && "rounded-xl p-1 transition hover:bg-muted/50",
+                        iClaimed && mode === "claim" && "bg-primary/10"
                       )}
                     >
                       <span className="font-medium">
@@ -450,7 +551,13 @@ export function SplitAssignPanel({
             {liveSummary && (
               <div className="space-y-4 rounded-2xl bg-muted/40 p-4 text-sm">
                 <div>
-                  <p className="mb-3 font-medium">Each person&apos;s share</p>
+                  <p className="mb-1 font-medium">Each person&apos;s share</p>
+                  {Number(data.receipt.service_charge) > 0 && data.members.length > 0 && (
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      Service charge ({formatPHP(Number(data.receipt.service_charge), currency)})
+                      is split equally among all {data.members.length} members
+                    </p>
+                  )}
                   <ul className="space-y-2">
                     {liveSummary.members.map((m) => {
                       const meta = data.members.find((x) => x.id === m.memberId);
@@ -584,10 +691,16 @@ export function SplitAssignPanel({
               </div>
             )}
 
-            <Button className="w-full" onClick={() => void save()} disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save split
-            </Button>
+            {canManageSplit ? (
+              <Button className="w-full" onClick={() => void save()} disabled={saving}>
+                {saving ? <Loader2 className="animate-spin" /> : <Save />}
+                Save split
+              </Button>
+            ) : (
+              <p className="text-center text-xs text-muted-foreground">
+                {saving ? "Saving…" : "Claims save when you tap"}
+              </p>
+            )}
           </>
         )}
       </CardContent>

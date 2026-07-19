@@ -8,16 +8,38 @@ import { publicEnv } from "@/lib/env";
 import { safeRedirectPath } from "@/lib/security";
 import { Button } from "@/components/ui/button";
 
+function appOrigin() {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return publicEnv.appUrl;
+}
+
+function setOAuthCookies(invite: string | undefined, next: string) {
+  const maxAge = 600;
+  const secure =
+    typeof window !== "undefined" && window.location.protocol === "https:"
+      ? "; Secure"
+      : "";
+  if (invite && invite.length >= 4) {
+    document.cookie = `paypals_oauth_invite=${encodeURIComponent(invite)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+  }
+  document.cookie = `paypals_oauth_next=${encodeURIComponent(next)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+}
+
 export function GoogleButton({
   next = "/dashboard",
   label = "Continue with Google",
   inviteCode,
   disabled = false,
+  /** signup requires invite; login is for existing invite-verified accounts */
+  mode = "login",
 }: {
   next?: string;
   label?: string;
   inviteCode?: string;
   disabled?: boolean;
+  mode?: "login" | "signup";
 }) {
   const [loading, setLoading] = useState(false);
   const safeNext = safeRedirectPath(
@@ -27,9 +49,19 @@ export function GoogleButton({
 
   async function handleGoogle() {
     if (disabled) {
-      toast.error("Enter a valid invite code first");
+      toast.error(
+        mode === "signup"
+          ? "Enter a valid invite code first"
+          : "Google sign-in is unavailable"
+      );
       return;
     }
+
+    if (mode === "signup" && (!inviteCode || inviteCode.trim().length < 4)) {
+      toast.error("Enter a valid invite code before signing up with Google");
+      return;
+    }
+
     if (!publicEnv.isConfigured) {
       toast.error("Supabase is not configured. Add env vars to .env.local");
       return;
@@ -37,20 +69,25 @@ export function GoogleButton({
 
     setLoading(true);
     const supabase = createClient();
+    const origin = appOrigin();
+    const invite = inviteCode?.trim() || undefined;
+
+    setOAuthCookies(invite, safeNext);
 
     const callbackParams = new URLSearchParams();
     callbackParams.set("next", safeNext);
-    if (inviteCode && inviteCode.length >= 4) {
-      callbackParams.set("invite", inviteCode);
-    }
+    callbackParams.set("mode", mode);
+    if (invite) callbackParams.set("invite", invite);
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${publicEnv.appUrl}/auth/callback?${callbackParams.toString()}`,
-        queryParams: inviteCode
-          ? undefined
-          : undefined,
+        // Use the current origin so mobile / LAN / preview hosts match
+        redirectTo: `${origin}/auth/callback?${callbackParams.toString()}`,
+        queryParams: {
+          access_type: "online",
+          prompt: "select_account",
+        },
       },
     });
 

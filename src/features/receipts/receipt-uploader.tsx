@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
@@ -43,7 +45,7 @@ async function maybeConvertHeic(file: File): Promise<File> {
   }
 }
 
-export function ReceiptUploader() {
+export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -53,8 +55,29 @@ export function ReceiptUploader() {
   const [uploading, setUploading] = useState(false);
   const [scanning, setScanning] = useState(false);
 
+  const { data: groupGate, isLoading: gateLoading } = useQuery({
+    queryKey: ["group-upload-gate", groupId],
+    enabled: Boolean(groupId),
+    queryFn: async () => {
+      const res = await fetch(`/api/groups/${groupId}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Group not found");
+      return json.data as {
+        group: { id: string; name: string; created_by: string };
+        my_role: string | null;
+      };
+    },
+  });
+
+  const blockedForGroup =
+    Boolean(groupId) && !gateLoading && groupGate != null && groupGate.my_role !== "owner";
+
   const processFile = useCallback(
     async (file: File) => {
+      if (groupId && groupGate && groupGate.my_role !== "owner") {
+        toast.error("Only the group creator can upload receipts to this group");
+        return;
+      }
       setFileName(file.name);
       if (file.type.startsWith("image/") || /\.(heic|heif)$/i.test(file.name)) {
         const url = URL.createObjectURL(file);
@@ -69,6 +92,7 @@ export function ReceiptUploader() {
         const ready = await maybeConvertHeic(file);
         const form = new FormData();
         form.append("file", ready);
+        if (groupId) form.append("group_id", groupId);
 
         const res = await fetch("/api/upload", {
           method: "POST",
@@ -114,7 +138,7 @@ export function ReceiptUploader() {
         setUploading(false);
       }
     },
-    [router]
+    [router, groupId, groupGate]
   );
 
   const onDrop = useCallback(
@@ -158,6 +182,19 @@ export function ReceiptUploader() {
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6" onPaste={onPaste}>
+      {blockedForGroup && (
+        <div className="rounded-2xl border border-border bg-muted/30 px-4 py-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Only the group creator can upload receipts. Open a receipt on the group page
+            and tap what you got instead.
+          </p>
+          <Button className="mt-4" variant="outline" asChild>
+            <Link href={`/groups/${groupId}`}>Back to group</Link>
+          </Button>
+        </div>
+      )}
+
+      {!blockedForGroup && (
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -260,8 +297,9 @@ export function ReceiptUploader() {
           }}
         />
       </div>
+      )}
 
-      {fileName && !scanning && (
+      {fileName && !scanning && !blockedForGroup && (
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-border px-4 py-3 text-sm">
           <span className="truncate text-muted-foreground">{fileName}</span>
           <Button

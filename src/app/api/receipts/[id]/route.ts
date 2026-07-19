@@ -12,15 +12,17 @@ export async function GET(_request: Request, { params }: Params) {
     const { supabase, user } = auth;
     const { id } = await params;
 
+    // RLS: creator or group member via can_access_receipt
     const { data: receipt, error } = await supabase
       .from("receipts")
       .select("*")
       .eq("id", id)
-      .eq("created_by", user.id)
       .maybeSingle();
 
     if (error) return fail(error.message, 400);
     if (!receipt) return notFound("Receipt not found");
+
+    const canEdit = receipt.created_by === user.id;
 
     const [{ data: items }, { data: images }, { data: history }] = await Promise.all([
       supabase
@@ -36,14 +38,11 @@ export async function GET(_request: Request, { params }: Params) {
         .order("created_at", { ascending: true }),
     ]);
 
-    // Signed URL for first image
+    // Prefer proxy so group members can always view the image (not only the uploader)
     let imageUrl: string | null = null;
     const path = images?.[0]?.storage_path;
     if (path) {
-      const { data: signed } = await supabase.storage
-        .from("receipts")
-        .createSignedUrl(path, 60 * 30);
-      imageUrl = signed?.signedUrl ?? null;
+      imageUrl = `/api/receipts/${id}/image`;
     }
 
     return ok({
@@ -52,6 +51,7 @@ export async function GET(_request: Request, { params }: Params) {
       images: images ?? [],
       history: history ?? [],
       imageUrl,
+      canEdit,
     });
   } catch (error) {
     console.error(error);
@@ -78,6 +78,7 @@ const patchSchema = z.object({
   discount: z.number().min(0).optional(),
   service_charge: z.number().min(0).optional(),
   tip: z.number().min(0).optional(),
+  group_id: z.string().uuid().nullable().optional(),
   status: z
     .enum([
       "draft",
@@ -113,6 +114,18 @@ export async function PATCH(request: Request, { params }: Params) {
     if (!existing) return notFound("Receipt not found");
 
     const { items, ...fields } = parsed.data;
+
+    if (fields.group_id) {
+      const { data: group } = await supabase
+        .from("groups")
+        .select("id, created_by")
+        .eq("id", fields.group_id)
+        .maybeSingle();
+      if (!group) return fail("Group not found", 404);
+      if (group.created_by !== user.id) {
+        return fail("Only the group creator can link receipts to this group", 403);
+      }
+    }
 
     let totalsUpdate: Record<string, number> = {};
 

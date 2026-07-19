@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     }
 
     const pattern = `%${q.replace(/[%_,]/g, "")}%`;
+    const peopleFilter = `full_name.ilike."${pattern}",username.ilike."${pattern}"`;
 
     const [receipts, memberships, profiles] = await Promise.all([
       supabase
@@ -27,10 +28,10 @@ export async function GET(request: Request) {
         .eq("user_id", user.id),
       supabase
         .from("profiles")
-        .select("id, full_name, username, avatar_url")
-        .or(`full_name.ilike.${pattern},username.ilike.${pattern}`)
+        .select("id, full_name, username, avatar_url, email")
+        .or(peopleFilter)
         .neq("id", user.id)
-        .limit(8),
+        .limit(12),
     ]);
 
     if (receipts.error) return fail(receipts.error.message, 400);

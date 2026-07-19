@@ -71,7 +71,7 @@ export function AppTopbar({
       <button
         type="button"
         onClick={onSearchClick}
-        className="ml-auto flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 text-sm text-muted-foreground transition hover:bg-muted/70 sm:ml-0 md:max-w-md"
+        className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 text-sm text-muted-foreground transition hover:bg-muted/70 md:max-w-md"
       >
         <Search className="h-4 w-4 shrink-0" />
         <span className="truncate">Search…</span>
@@ -80,7 +80,7 @@ export function AppTopbar({
         </kbd>
       </button>
 
-      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
         <NotificationsBell userId={profile?.id ?? null} />
         <ThemeToggle compact />
         <DropdownMenu>

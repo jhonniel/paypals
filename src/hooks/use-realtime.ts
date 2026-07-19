@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-/** Subscribe to group member changes */
+/** Subscribe to group member + receipt changes */
 export function useGroupRealtime(groupId: string | null, onChange: () => void) {
   useEffect(() => {
     if (!groupId) return;
@@ -22,6 +22,16 @@ export function useGroupRealtime(groupId: string | null, onChange: () => void) {
           event: "*",
           schema: "public",
           table: "group_members",
+          filter: `group_id=eq.${groupId}`,
+        },
+        () => onChange()
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "receipts",
           filter: `group_id=eq.${groupId}`,
         },
         () => onChange()

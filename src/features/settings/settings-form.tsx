@@ -67,6 +67,7 @@ export function SettingsForm() {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [savingPayout, setSavingPayout] = useState(false);
   const [uploadingQrIndex, setUploadingQrIndex] = useState<number | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -91,6 +92,7 @@ export function SettingsForm() {
         ocr_provider: s.ocr_provider ?? null,
       });
       setPaymentMethods(normalizePaymentMethods(json.data.profile?.payment_methods));
+      setIsAdmin(Boolean(json.data.profile?.is_admin));
 
       if (usageRes.ok) {
         const u = await usageRes.json();
@@ -318,33 +320,35 @@ export function SettingsForm() {
                 onBlur={() => void save({ language: settings.language })}
               />
             </div>
-            <div className="space-y-2">
-              <Label>OCR provider preference</Label>
-              <div className="flex flex-wrap gap-2">
-                {(
-                  [
-                    { value: null, label: "System default" },
-                    { value: "ocrspace", label: "OCR.Space" },
-                    { value: "google", label: "Google Vision" },
-                    { value: "openai", label: "OpenAI" },
-                    { value: "tesseract", label: "Tesseract" },
-                  ] as const
-                ).map((opt) => (
-                  <Button
-                    key={String(opt.value)}
-                    type="button"
-                    size="sm"
-                    variant={settings.ocr_provider === opt.value ? "default" : "outline"}
-                    onClick={() => void save({ ocr_provider: opt.value })}
-                  >
-                    {opt.label}
-                  </Button>
-                ))}
+            {isAdmin && (
+              <div className="space-y-2">
+                <Label>OCR provider preference</Label>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { value: null, label: "System default" },
+                      { value: "ocrspace", label: "OCR.Space" },
+                      { value: "google", label: "Google Vision" },
+                      { value: "openai", label: "OpenAI" },
+                      { value: "tesseract", label: "Tesseract" },
+                    ] as const
+                  ).map((opt) => (
+                    <Button
+                      key={String(opt.value)}
+                      type="button"
+                      size="sm"
+                      variant={settings.ocr_provider === opt.value ? "default" : "outline"}
+                      onClick={() => void save({ ocr_provider: opt.value })}
+                    >
+                      {opt.label}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Used when re-running OCR if the server allows that provider.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Used when re-running OCR if the server allows that provider.
-              </p>
-            </div>
+            )}
             {saving && (
               <p className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" /> Saving…

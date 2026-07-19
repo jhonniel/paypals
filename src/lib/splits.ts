@@ -194,14 +194,42 @@ export type Adjustments = {
   tip: number;
 };
 
+export type SplitOptions = {
+  grandTotal?: number;
+  /**
+   * When set (typically every group member), service charge is split equally
+   * across these people — even if they claimed no items.
+   */
+  equalServiceChargeMemberIds?: string[];
+};
+
+function ensureMember(
+  memberMap: Map<string, MemberShare>,
+  memberId: string
+): MemberShare {
+  const existing = memberMap.get(memberId);
+  if (existing) return existing;
+  const created: MemberShare = {
+    memberId,
+    itemsSubtotal: 0,
+    adjustments: 0,
+    total: 0,
+    lines: [],
+  };
+  memberMap.set(memberId, created);
+  return created;
+}
+
 /**
  * Build per-member payment summary from item assignments.
- * Tax / tip / service / discount are allocated pro-rata by each member's items share.
+ * Tax / tip / discount are allocated pro-rata by each member's items share.
+ * Service charge is split equally among `equalServiceChargeMemberIds` (everyone
+ * in the group) when provided; otherwise falls back to pro-rata.
  */
 export function computeMemberSplits(
   items: ItemSplitInput[],
   adjustments: Adjustments,
-  grandTotal?: number
+  options?: SplitOptions
 ): SplitSummary {
   const memberMap = new Map<string, MemberShare>();
 
@@ -218,36 +246,59 @@ export function computeMemberSplits(
     let itemAssigned = d(0);
     shares.forEach((amount, memberId) => {
       itemAssigned = itemAssigned.plus(amount);
-      const existing = memberMap.get(memberId) ?? {
-        memberId,
-        itemsSubtotal: 0,
-        adjustments: 0,
-        total: 0,
-        lines: [],
-      };
+      const existing = ensureMember(memberMap, memberId);
       existing.itemsSubtotal = moneyNumber(d(existing.itemsSubtotal).plus(amount));
       existing.lines.push({
         itemId: item.itemId,
         itemName: item.itemName,
         amount,
-        method: item.assignments.find((a) => a.memberId === memberId)?.splitMethod ?? "equal",
+        method:
+          item.assignments.find((a) => a.memberId === memberId)?.splitMethod ??
+          "equal",
       });
-      memberMap.set(memberId, existing);
     });
     assignedTotal = assignedTotal.plus(itemAssigned);
   }
 
+  const serviceIds = (options?.equalServiceChargeMemberIds ?? []).filter(Boolean);
+  for (const id of serviceIds) {
+    ensureMember(memberMap, id);
+  }
+
   const unassignedTotal = moneyNumber(itemsGrand.minus(assignedTotal));
-  const netAdj = d(adjustments.tax)
-    .plus(adjustments.serviceCharge)
+  const otherAdj = d(adjustments.tax)
     .plus(adjustments.tip)
     .minus(adjustments.discount);
+  const serviceCharge = d(adjustments.serviceCharge);
 
   const itemsAssignedNum = moneyNumber(assignedTotal);
+
+  // Tax / tip / discount — pro-rata by items claimed
   memberMap.forEach((m) => {
     const ratio =
       itemsAssignedNum > 0 ? d(m.itemsSubtotal).div(itemsAssignedNum) : d(0);
-    m.adjustments = moneyNumber(netAdj.mul(ratio));
+    m.adjustments = moneyNumber(otherAdj.mul(ratio));
+  });
+
+  // Service charge — equal among everyone in the group
+  if (serviceCharge.gt(0)) {
+    if (serviceIds.length > 0) {
+      const eq = allocateEqual(moneyNumber(serviceCharge), serviceIds);
+      eq.forEach((amt, id) => {
+        const m = ensureMember(memberMap, id);
+        m.adjustments = moneyNumber(d(m.adjustments).plus(amt));
+      });
+    } else {
+      // No group roster yet — fall back to pro-rata among assignees
+      memberMap.forEach((m) => {
+        const ratio =
+          itemsAssignedNum > 0 ? d(m.itemsSubtotal).div(itemsAssignedNum) : d(0);
+        m.adjustments = moneyNumber(d(m.adjustments).plus(serviceCharge.mul(ratio)));
+      });
+    }
+  }
+
+  memberMap.forEach((m) => {
     m.total = moneyNumber(d(m.itemsSubtotal).plus(m.adjustments));
   });
 
@@ -256,37 +307,51 @@ export function computeMemberSplits(
   );
 
   const membersSum = members.reduce((s, m) => s.plus(m.total), d(0));
-  const computedGrand = moneyNumber(
-    itemsGrand.plus(netAdj)
-  );
-  const target = grandTotal !== undefined ? moneyNumber(grandTotal) : computedGrand;
+  const computedGrand = moneyNumber(itemsGrand.plus(otherAdj).plus(serviceCharge));
+  const target =
+    options?.grandTotal !== undefined
+      ? moneyNumber(options.grandTotal)
+      : computedGrand;
 
   return {
     members,
     unassignedTotal,
     assignedTotal: itemsAssignedNum,
     grandTotal: target,
-    remaining: moneyNumber(d(target).minus(membersSum).minus(unassignedTotal > 0 ? d(unassignedTotal).mul(d(target).div(itemsGrand.gt(0) ? itemsGrand : 1)) : 0)),
+    remaining: moneyNumber(
+      d(target)
+        .minus(membersSum)
+        .minus(
+          unassignedTotal > 0
+            ? d(unassignedTotal).mul(
+                d(target).div(itemsGrand.gt(0) ? itemsGrand : 1)
+              )
+            : 0
+        )
+    ),
   };
 }
 
-/** Simplify remaining: grandTotal - sum(member totals) - unassigned's pro-rata of full bill */
+/** Simplify remaining: grandTotal - sum(member totals) - unassigned's pro-rata of tax/tip/discount */
 export function computeSplitBalances(
   items: ItemSplitInput[],
-  adjustments: Adjustments
+  adjustments: Adjustments,
+  options?: SplitOptions
 ): SplitSummary {
-  const summary = computeMemberSplits(items, adjustments);
-  const netAdj = d(adjustments.tax)
-    .plus(adjustments.serviceCharge)
+  const summary = computeMemberSplits(items, adjustments, options);
+  const otherAdj = d(adjustments.tax)
     .plus(adjustments.tip)
     .minus(adjustments.discount);
+  const serviceCharge = d(adjustments.serviceCharge);
   const itemsGrand = items.reduce((s, i) => s.plus(i.itemTotal), d(0));
-  const fullTotal = moneyNumber(itemsGrand.plus(netAdj));
+  const fullTotal = moneyNumber(itemsGrand.plus(otherAdj).plus(serviceCharge));
   const paidByMembers = summary.members.reduce((s, m) => s.plus(m.total), d(0));
-  // Unassigned items also get pro-rata adjustments
+
+  // Unassigned items get pro-rata tax/tip/discount only — service already
+  // went equally to every group member.
   const unassignedAdj =
     itemsGrand.gt(0) && summary.unassignedTotal > 0
-      ? moneyNumber(netAdj.mul(d(summary.unassignedTotal).div(itemsGrand)))
+      ? moneyNumber(otherAdj.mul(d(summary.unassignedTotal).div(itemsGrand)))
       : 0;
   const unassignedWithAdj = moneyNumber(d(summary.unassignedTotal).plus(unassignedAdj));
 

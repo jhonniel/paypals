@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "keep-awake": "node scripts/keep-supabase-awake.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

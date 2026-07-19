@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Upload,
   ArrowRight,
+  HandCoins,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useDashboard } from "@/hooks/use-dashboard";
@@ -135,6 +136,54 @@ export function DashboardView() {
           </motion.div>
         ))}
       </div>
+
+      {(data.owedToYou?.length ?? 0) > 0 && (
+        <Card className="min-w-0 border-primary/20 bg-primary/[0.03]">
+          <CardHeader className="flex flex-col gap-2 space-y-0 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-xl bg-primary/10 p-2.5 text-primary">
+                <HandCoins className="h-4 w-4" />
+              </div>
+              <div>
+                <CardTitle className="text-base sm:text-lg">Owed to you</CardTitle>
+                <CardDescription className="text-xs sm:text-sm">
+                  Friends who haven’t paid you back on bills you covered —{" "}
+                  {money(data.stats.totalOwedToYou ?? 0)} total
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+            <ul className="divide-y divide-border">
+              {data.owedToYou.map((row) => (
+                <li
+                  key={`${row.memberId}-${row.userId ?? "guest"}`}
+                  className="flex items-center justify-between gap-3 py-3 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{row.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {row.receiptCount} bill{row.receiptCount === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="font-semibold tabular-nums text-primary">
+                      {money(row.amount, row.currency)}
+                    </span>
+                    {row.receiptIds[0] && (
+                      <Button variant="ghost" size="sm" asChild className="h-8 px-2">
+                        <Link href={`/receipts/${row.receiptIds[0]}`}>
+                          View <ArrowRight className="h-3.5 w-3.5" />
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
         <Card className="min-w-0 xl:col-span-2">

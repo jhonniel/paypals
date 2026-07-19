@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Users, Loader2 } from "lucide-react";
+import { Plus, Users, Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,15 +30,19 @@ async function fetchGroups(): Promise<GroupRow[]> {
 }
 
 export function GroupsPageView() {
+  const router = useRouter();
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["groups"],
     queryFn: fetchGroups,
   });
   const [open, setOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   async function createGroup(e: React.FormEvent) {
     e.preventDefault();
@@ -55,10 +60,42 @@ export function GroupsPageView() {
       setName("");
       setDescription("");
       await qc.invalidateQueries({ queryKey: ["groups"] });
+      if (json.data?.id) {
+        router.push(`/groups/${json.data.id}`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function joinByCode(e: React.FormEvent) {
+    e.preventDefault();
+    const code = inviteCode.trim();
+    if (code.length < 4) {
+      toast.error("Enter a valid invite code");
+      return;
+    }
+    setJoining(true);
+    try {
+      const res = await fetch("/api/groups/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Join failed");
+      toast.success("Joined group");
+      setInviteCode("");
+      setJoinOpen(false);
+      await qc.invalidateQueries({ queryKey: ["groups"] });
+      const groupId = json.data?.group_id;
+      if (groupId) router.push(`/groups/${groupId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Join failed");
+    } finally {
+      setJoining(false);
     }
   }
 
@@ -71,15 +108,68 @@ export function GroupsPageView() {
             Family, friends, office — share receipts and splits.
           </p>
         </div>
-        <Button className="w-full sm:w-auto" onClick={() => setOpen((v) => !v)}>
-          <Plus /> New group
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <Button
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={() => {
+              setJoinOpen((v) => !v);
+              setOpen(false);
+            }}
+          >
+            <KeyRound /> Join with code
+          </Button>
+          <Button
+            className="w-full sm:w-auto"
+            onClick={() => {
+              setOpen((v) => !v);
+              setJoinOpen(false);
+            }}
+          >
+            <Plus /> New group
+          </Button>
+        </div>
       </div>
+
+      {joinOpen && (
+        <Card>
+          <CardContent className="p-4 sm:p-6">
+            <form onSubmit={(e) => void joinByCode(e)} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="join-code">Invite code</Label>
+                <Input
+                  id="join-code"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  placeholder="Paste group invite code"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  required
+                  minLength={4}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Ask a group member for their invite code, then join here.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" disabled={joining || inviteCode.trim().length < 4}>
+                  {joining && <Loader2 className="animate-spin" />}
+                  Join group
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setJoinOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       {open && (
         <Card>
           <CardContent className="p-4 sm:p-6">
-            <form onSubmit={createGroup} className="space-y-4">
+            <form onSubmit={(e) => void createGroup(e)} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="gname">Name</Label>
                 <Input
@@ -115,9 +205,9 @@ export function GroupsPageView() {
       )}
 
       {isLoading && (
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full" />
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-[4/3] w-full rounded-2xl" />
           ))}
         </div>
       )}
@@ -128,33 +218,45 @@ export function GroupsPageView() {
         </p>
       )}
 
-      {data && data.length === 0 && !open && (
+      {data && data.length === 0 && !open && !joinOpen && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 px-6 py-14 text-center">
             <Users className="h-8 w-8 text-muted-foreground" />
             <p className="font-medium">No groups yet</p>
             <p className="text-sm text-muted-foreground">
-              Create one to invite friends and split bills.
+              Create one, or join with an invite code from a friend.
             </p>
+            <div className="mt-2 flex flex-wrap justify-center gap-2">
+              <Button variant="outline" onClick={() => setJoinOpen(true)}>
+                <KeyRound /> Join with code
+              </Button>
+              <Button onClick={() => setOpen(true)}>
+                <Plus /> New group
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
 
-      <ul className="space-y-2">
+      <ul className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
         {(data ?? []).map((g) => (
           <li key={g.id}>
             <Link
               href={`/groups/${g.id}`}
-              className="glass flex items-center justify-between gap-3 rounded-2xl px-4 py-4 transition hover:bg-muted/40"
+              className="glass flex h-full min-h-[7.5rem] flex-col justify-between gap-3 rounded-2xl p-3 transition hover:bg-muted/40 sm:min-h-[8.5rem] sm:p-4"
             >
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-sm font-semibold text-accent-foreground">
+                {g.name.trim().charAt(0).toUpperCase() || "G"}
+              </div>
               <div className="min-w-0">
-                <p className="truncate font-medium">{g.name}</p>
-                <p className="text-xs capitalize text-muted-foreground">
+                <p className="line-clamp-2 text-sm font-medium leading-snug sm:text-base">
+                  {g.name}
+                </p>
+                <p className="mt-1 truncate text-[11px] capitalize text-muted-foreground sm:text-xs">
                   {g.my_role}
                   {g.description ? ` · ${g.description}` : ""}
                 </p>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">Open</span>
             </Link>
           </li>
         ))}

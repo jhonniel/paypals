@@ -1,6 +1,12 @@
 import { ReceiptUploader } from "@/features/receipts/receipt-uploader";
 
-export default function NewReceiptPage() {
+export default async function NewReceiptPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ group?: string }>;
+}) {
+  const { group } = await searchParams;
+
   return (
     <div className="space-y-4 sm:space-y-6">
       <div>
@@ -9,9 +15,10 @@ export default function NewReceiptPage() {
         </h1>
         <p className="mt-1 text-sm text-muted-foreground sm:text-base">
           Drag & drop, camera, clipboard, or PDF — OCR extracts items automatically.
+          {group ? " This receipt will be shared with your group." : ""}
         </p>
       </div>
-      <ReceiptUploader />
+      <ReceiptUploader groupId={group ?? null} />
     </div>
   );
 }

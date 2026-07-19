@@ -1,0 +1,29 @@
+# Ping Supabase every 5 days so the free project does not pause from inactivity.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    # 08:00 UTC on the 1st, 6th, 11th, 16th, 21st, and 26th of each month (~every 5 days)
+    - cron: "0 8 */5 * *"
+  workflow_dispatch:
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ping Supabase
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # Optional: your deployed app URL (e.g. https://paypals.vercel.app)
+          KEEP_AWAKE_URL: ${{ secrets.KEEP_AWAKE_URL }}
+        run: node scripts/keep-supabase-awake.mjs

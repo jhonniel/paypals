@@ -88,6 +88,7 @@ export interface GroupMember {
   guest_email: string | null;
   guest_name: string | null;
   invite_token: string | null;
+  invited_by: string | null;
   claimed_at: string | null;
   joined_at: string;
 }

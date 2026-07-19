@@ -44,10 +44,22 @@ export function SignupForm() {
   });
 
   const inviteCode = watch("inviteCode");
+  const authError = searchParams.get("error");
 
   useEffect(() => {
     if (presetInvite) setValue("inviteCode", presetInvite);
   }, [presetInvite, setValue]);
+
+  useEffect(() => {
+    if (!authError) return;
+    const messages: Record<string, string> = {
+      invite_required:
+        "Google sign-up needs a valid invite code. Enter your code, then try again.",
+      google_not_registered:
+        "Finish signup with a valid invite code first.",
+    };
+    toast.error(messages[authError] ?? decodeURIComponent(authError));
+  }, [authError]);
 
   useEffect(() => {
     const code = inviteCode?.trim() ?? "";
@@ -156,8 +168,12 @@ export function SignupForm() {
           next={googleNext}
           inviteCode={inviteCode?.trim() || undefined}
           label="Sign up with Google"
+          mode="signup"
           disabled={!inviteLabel}
         />
+        <p className="-mt-2 text-xs text-muted-foreground">
+          Google signup only works after a valid invite code is entered above.
+        </p>
 
         <div className="space-y-2">
           <Label htmlFor="fullName">Full name</Label>

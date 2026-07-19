@@ -12,14 +12,14 @@ export async function GET(_request: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
-    const { supabase, user } = auth;
+    const { supabase } = auth;
     const { id } = await params;
 
+    // Any group member who can access the receipt may view the enhanced preview
     const { data: receipt } = await supabase
       .from("receipts")
       .select("id")
       .eq("id", id)
-      .eq("created_by", user.id)
       .maybeSingle();
 
     if (!receipt) return notFound("Receipt not found");

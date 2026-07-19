@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = safeRedirectPath(searchParams.get("next"), "/dashboard");
+  const authError = searchParams.get("error");
 
   const {
     register,
@@ -29,6 +31,17 @@ export function LoginForm() {
       password: "",
     },
   });
+
+  useEffect(() => {
+    if (!authError) return;
+    const messages: Record<string, string> = {
+      google_not_registered:
+        "Google sign-in is only for existing accounts. Sign up with an invite code first.",
+      invite_required: "A valid invite code is required.",
+      auth_callback: "Google sign-in failed. Please try again.",
+    };
+    toast.error(messages[authError] ?? decodeURIComponent(authError));
+  }, [authError]);
 
   async function onSubmit(values: LoginValues) {
     try {
@@ -55,7 +68,13 @@ export function LoginForm() {
 
   return (
     <div className="space-y-6">
-      <GoogleButton next={next} />
+      <GoogleButton next={next} label="Sign in with Google" mode="login" />
+      <p className="-mt-3 text-center text-xs text-muted-foreground">
+        Only for accounts already created with an invite. New here?{" "}
+        <Link href="/signup" className="text-primary hover:underline">
+          Sign up with an invite code
+        </Link>
+      </p>
       <div className="relative">
         <div className="absolute inset-0 flex items-center">
           <span className="w-full border-t border-border" />

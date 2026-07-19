@@ -1,5 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 
+export type OwedToYouRow = {
+  memberId: string;
+  userId: string | null;
+  name: string;
+  amount: number;
+  currency: string;
+  receiptCount: number;
+  receiptIds: string[];
+};
+
 export type DashboardData = {
   stats: {
     totalExpenses: number;
@@ -8,6 +18,7 @@ export type DashboardData = {
     friendsCount: number;
     unreadNotifications: number;
     mostActiveGroup: string | null;
+    totalOwedToYou: number;
   };
   recentReceipts: Array<{
     id: string;
@@ -28,6 +39,7 @@ export type DashboardData = {
     receipt_id: string | null;
   }>;
   monthlyChart: Array<{ label: string; total: number }>;
+  owedToYou: OwedToYouRow[];
 };
 
 async function fetchDashboard(): Promise<DashboardData> {
