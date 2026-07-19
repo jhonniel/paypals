@@ -26,8 +26,9 @@ function normalizeSeats(raw: unknown): OpenSeat[] {
 
 /** Always resolve open seats — RPC first, then service-role fallback */
 async function loadOpenSeats(
+  // Accept Supabase clients — rpc returns a Thenable builder, not Promise
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userClient: { rpc: (fn: string, args: Record<string, unknown>) => Promise<any> },
+  userClient: { rpc: (fn: string, args: Record<string, unknown>) => any },
   code: string
 ): Promise<{ seats: OpenSeat[]; source: "rpc" | "admin" | "none"; error?: string }> {
   const cleaned = code.trim();

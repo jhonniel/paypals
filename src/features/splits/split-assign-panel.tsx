@@ -67,7 +67,7 @@ export function SplitAssignPanel({
   currentUserId?: string | null;
 }) {
   const qc = useQueryClient();
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
   const [groupId, setGroupId] = useState<string>("");
   const [paidByMemberId, setPaidByMemberId] = useState<string>("");
   const [localAssignments, setLocalAssignments] = useState<Record<string, string[]>>(
@@ -180,18 +180,12 @@ export function SplitAssignPanel({
         cfg.mode === "among_group"
           ? groupMemberIds
           : (localAssignments[item.id] ?? []);
-      const divisor =
-        cfg.mode === "among_n"
-          ? Math.max(cfg.n, 1)
-          : Math.max(memberIds.length, 1);
       const assignments: AssignmentInput[] = memberIds.map((memberId) => ({
         memberId,
         splitMethod: method,
-        sharePercentage: method === "percentage" ? 100 / divisor : null,
-        shareQuantity:
-          method === "quantity" ? Number(item.quantity) / divisor : null,
-        shareAmount:
-          method === "custom" ? Number(item.total_price) / divisor : null,
+        sharePercentage: null,
+        shareQuantity: null,
+        shareAmount: null,
         weight: 1,
       }));
       return {

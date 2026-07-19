@@ -102,8 +102,8 @@ function fieldsFromOcrResult(result: OcrResult) {
     .join("\n");
   const text = [parsedText, ...textParts].filter(Boolean).join("\n");
   const parsed = parsePaymentProofText(text);
-  let amount = result.total != null ? moneyNumber(result.total) : parsed.amount;
-  let date =
+  const amount = result.total != null ? moneyNumber(result.total) : parsed.amount;
+  const date =
     (result.date ? tryReceiptDate(result.date) : null) ?? parsed.date;
   return {
     amount,

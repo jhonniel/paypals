@@ -12,7 +12,6 @@ import {
   YAxis,
 } from "recharts";
 import {
-  Receipt,
   Users,
   TrendingUp,
   Upload,

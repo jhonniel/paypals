@@ -48,13 +48,14 @@ export async function GET(_req: Request, { params }: Params) {
       .order("joined_at", { ascending: true });
 
     if (membersQuery.error && /payment_methods|column/i.test(membersQuery.error.message)) {
-      membersQuery = await supabase
+      // Fallback when payment_methods column is missing — widen type for reassignment
+      membersQuery = (await supabase
         .from("group_members")
         .select(
           "id, role, user_id, guest_email, guest_name, invite_token, claimed_at, joined_at, profiles:user_id(id, full_name, username, avatar_url, email)"
         )
         .eq("group_id", id)
-        .order("joined_at", { ascending: true });
+        .order("joined_at", { ascending: true })) as typeof membersQuery;
     }
 
     const { data: members, error: membersError } = membersQuery;

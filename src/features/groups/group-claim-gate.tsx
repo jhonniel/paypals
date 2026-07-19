@@ -25,6 +25,7 @@ type ClaimItem = {
   claimer_ids?: string[];
   claimed_by?: string[];
   remaining_quantity?: number;
+  claimed_quantity?: number | null;
   claims?: Array<{ member_id: string; name: string; quantity: number }>;
 };
 

@@ -440,7 +440,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
                 const mobile =
                   typeof navigator !== "undefined" &&
                   /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                if (!mobile && navigator.mediaDevices?.getUserMedia) {
+                if (!mobile && typeof navigator !== "undefined" && navigator.mediaDevices) {
                   e.preventDefault();
                   void openCamera();
                 }
