@@ -45,7 +45,9 @@ export function LoginForm() {
   }, [authError]);
 
   useEffect(() => {
-    if (authErrorMessage) setFormError(authErrorMessage);
+    if (!authErrorMessage) return;
+    setFormError(authErrorMessage);
+    toast.error(authErrorMessage);
   }, [authErrorMessage]);
 
   async function onSubmit(values: LoginValues) {

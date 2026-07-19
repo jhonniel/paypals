@@ -15,7 +15,11 @@ function appOrigin() {
   return publicEnv.appUrl;
 }
 
-function setOAuthCookies(invite: string | undefined, next: string) {
+function setOAuthCookies(
+  invite: string | undefined,
+  next: string,
+  mode: "login" | "signup"
+) {
   const maxAge = 600;
   const secure =
     typeof window !== "undefined" && window.location.protocol === "https:"
@@ -25,6 +29,7 @@ function setOAuthCookies(invite: string | undefined, next: string) {
     document.cookie = `paypals_oauth_invite=${encodeURIComponent(invite)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
   }
   document.cookie = `paypals_oauth_next=${encodeURIComponent(next)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+  document.cookie = `paypals_oauth_mode=${encodeURIComponent(mode)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
 }
 
 export function GoogleButton({
@@ -72,7 +77,7 @@ export function GoogleButton({
     const origin = appOrigin();
     const invite = inviteCode?.trim() || undefined;
 
-    setOAuthCookies(invite, safeNext);
+    setOAuthCookies(invite, safeNext, mode);
 
     const callbackParams = new URLSearchParams();
     callbackParams.set("next", safeNext);

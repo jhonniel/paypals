@@ -57,7 +57,9 @@ export function SignupForm() {
       invite_required: "Enter a valid invite code to create your account.",
       google_not_registered: "Your email is not yet registered.",
     };
-    setFormError(messages[authError] ?? decodeURIComponent(authError));
+    const msg = messages[authError] ?? decodeURIComponent(authError);
+    setFormError(msg);
+    toast.error(msg);
   }, [authError]);
 
   useEffect(() => {

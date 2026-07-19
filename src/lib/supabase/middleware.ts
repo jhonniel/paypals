@@ -31,6 +31,7 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+  const authError = request.nextUrl.searchParams.get("error");
   const isAppRoute =
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/groups") ||
@@ -75,11 +76,14 @@ export async function updateSession(request: NextRequest) {
       profileError?.message?.includes("invite_verified") ||
       profileError?.code === "42703";
 
+    // No profile row → treat as unverified (do not auto-pass into the app)
     const inviteVerified = migrationMissing
       ? true
-      : profile == null || profile.invite_verified === undefined
-        ? true
-        : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
+      : profile == null
+        ? false
+        : profile.invite_verified === undefined
+          ? true
+          : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
 
     if (!inviteVerified && isAppRoute) {
       const url = request.nextUrl.clone();
@@ -100,8 +104,16 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.redirect(new URL(next, request.url));
     }
 
-    // Logged in but unverified on login/signup → send to claim
+    // Logged in but unverified on login/signup:
+    // Keep them on the page when showing an OAuth rejection error
+    // (otherwise middleware strips ?error= and they never see the message).
     if (user && isAuthRoute && !inviteVerified) {
+      if (
+        authError &&
+        (pathname.startsWith("/login") || pathname.startsWith("/signup"))
+      ) {
+        return supabaseResponse;
+      }
       return NextResponse.redirect(new URL("/claim-invite", request.url));
     }
   }
