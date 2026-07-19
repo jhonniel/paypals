@@ -40,8 +40,8 @@ export function ClaimInviteForm() {
       <CardHeader>
         <CardTitle>Enter your invite code</CardTitle>
         <CardDescription>
-          Your account needs a valid invite before you can use Paypals. Use an app invite
-          or a group invite code from a friend.
+          Your account needs an admin signup invite before you can use Paypals. Group
+          invite codes only work after you have an account.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -52,7 +52,7 @@ export function ClaimInviteForm() {
               id="code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="PAYPALS"
+              placeholder="One-time invite code"
               required
               minLength={4}
             />

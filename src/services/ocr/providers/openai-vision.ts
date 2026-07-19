@@ -25,7 +25,7 @@ export class OpenAIVisionProvider implements OcrProvider {
           {
             role: "system",
             content:
-              "Extract receipt data as JSON with keys: merchant, date, time, items (array of {name, quantity, unitPrice, totalPrice}), subtotal, tax, discount, serviceCharge, tip, total, confidence (0-100). Use numbers for money. Currency is PHP unless clearly otherwise.",
+              "Extract receipt data as JSON with keys: merchant, date, time, items (array of {name, quantity, unitPrice, totalPrice}), subtotal, discount, serviceCharge, tip, total, confidence (0-100). Prefer Amount Due as total. Do not extract tax/VAT as a separate field — set tax unused. Use numbers for money. Currency is PHP unless clearly otherwise.",
           },
           {
             role: "user",
@@ -79,7 +79,7 @@ export class OpenAIVisionProvider implements OcrProvider {
           (Number(i.quantity) || 1) * (Number(i.unitPrice) || 0),
       })),
       subtotal: parsed.subtotal ?? null,
-      tax: parsed.tax ?? null,
+      tax: null,
       discount: parsed.discount ?? null,
       serviceCharge: parsed.serviceCharge ?? null,
       tip: parsed.tip ?? null,

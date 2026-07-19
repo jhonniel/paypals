@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { ok, unauthorized, serverError } from "@/lib/api";
 import { computeOwedToYou } from "@/lib/owed-to-you";
+import { computeConfirmedPayments } from "@/lib/confirmed-payments";
+import { moneyNumber } from "@/lib/money";
 
 export async function GET() {
   try {
@@ -29,6 +31,7 @@ export async function GET() {
       monthlyRes,
       notificationsRes,
       owedToYou,
+      confirmed,
     ] = await Promise.all([
       supabase
         .from("receipts")
@@ -63,6 +66,7 @@ export async function GET() {
         .eq("user_id", user.id)
         .is("read_at", null),
       computeOwedToYou(supabase, user.id),
+      computeConfirmedPayments(supabase, user.id),
     ]);
 
     const monthlySpend = (monthlyRes.data ?? []).reduce(
@@ -75,13 +79,13 @@ export async function GET() {
       0
     );
 
-    // Build last 6 months series from receipts (best-effort)
-    const months: { label: string; total: number }[] = [];
+    const months: { label: string; total: number; payments: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       months.push({
         label: d.toLocaleString("en", { month: "short" }),
         total: 0,
+        payments: 0,
       });
     }
 
@@ -102,6 +106,17 @@ export async function GET() {
       }
     }
 
+    for (const p of confirmed.rows) {
+      if (p.direction !== "received" || !p.paidAt) continue;
+      const d = new Date(p.paidAt);
+      const idx =
+        (d.getFullYear() - sixMonthsAgo.getFullYear()) * 12 +
+        (d.getMonth() - sixMonthsAgo.getMonth());
+      if (idx >= 0 && idx < months.length) {
+        months[idx].payments = moneyNumber(months[idx].payments + p.amount);
+      }
+    }
+
     const groups = (groupsRes.data ?? [])
       .map((row) => {
         const g = row.groups as unknown as
@@ -113,6 +128,13 @@ export async function GET() {
       })
       .filter(Boolean);
 
+    const receivedThisMonth = confirmed.rows
+      .filter((p) => {
+        if (p.direction !== "received" || !p.paidAt) return false;
+        return new Date(p.paidAt) >= new Date(startOfMonth);
+      })
+      .reduce((s, p) => moneyNumber(s + p.amount), 0);
+
     return ok({
       stats: {
         totalExpenses,
@@ -122,12 +144,16 @@ export async function GET() {
         unreadNotifications: notificationsRes.count ?? 0,
         mostActiveGroup: groups[0]?.name ?? null,
         totalOwedToYou: owedToYou.totalOwed,
+        totalPaymentsReceived: confirmed.totalReceived,
+        totalPaymentsSent: confirmed.totalSent,
+        paymentsReceivedThisMonth: receivedThisMonth,
       },
       recentReceipts: receiptsRes.data ?? [],
       groups,
       activities: activitiesRes.data ?? [],
       monthlyChart: months,
       owedToYou: owedToYou.rows,
+      confirmedPayments: confirmed.rows,
     });
   } catch (error) {
     console.error(error);

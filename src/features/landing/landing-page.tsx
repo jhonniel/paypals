@@ -293,7 +293,7 @@ export function LandingPage() {
               {
                 icon: Shield,
                 title: "Invite-only accounts",
-                body: "Signup requires a valid invite code so your groups stay intentional.",
+                body: "Only admins issue signup invites, so new accounts stay intentional.",
               },
               {
                 icon: Wallet,
@@ -396,8 +396,8 @@ export function LandingPage() {
                 Ready to split the next bill cleanly?
               </h2>
               <p className="mt-4 text-base leading-relaxed text-muted-foreground">
-                You’ll need an invite code to join. Ask a friend who’s already on Paypals,
-                or use a group invite link from your host.
+                You’ll need an admin signup invite to create an account. After that, use a
+                group invite link from your host to join a bill.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Button size="lg" asChild>

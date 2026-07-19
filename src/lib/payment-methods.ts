@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 export const PAYMENT_METHOD_TYPES = ["gcash", "maya", "bank", "other"] as const;
 export const MAX_PAYMENT_ACCOUNTS = 3;
 
@@ -12,6 +14,11 @@ export type PaymentMethod = {
   account_name: string;
   account_number: string;
   qr_code_url: string | null;
+  /** Include this account in “Send payment to”. */
+  show_account: boolean;
+  show_account_name: boolean;
+  show_account_number: boolean;
+  show_qr: boolean;
 };
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethodType, string> = {
@@ -28,6 +35,10 @@ function newId() {
   return `pm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function boolOrDefault(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export function createEmptyPaymentMethod(
   type: PaymentMethodType = "bank"
 ): PaymentMethod {
@@ -38,7 +49,28 @@ export function createEmptyPaymentMethod(
     account_name: "",
     account_number: "",
     qr_code_url: null,
+    show_account: true,
+    show_account_name: true,
+    show_account_number: true,
+    show_qr: true,
   };
+}
+
+/** At most one account may be shown to friends. */
+export function ensureSingleShownAccount(
+  methods: PaymentMethod[],
+  preferId?: string | null
+): PaymentMethod[] {
+  if (methods.length === 0) return methods;
+  const preferred =
+    (preferId && methods.find((m) => m.id === preferId && m.show_account)) ||
+    methods.find((m) => m.show_account) ||
+    null;
+  const shownId = preferred?.id ?? null;
+  return methods.map((m) => ({
+    ...m,
+    show_account: shownId ? m.id === shownId : false,
+  }));
 }
 
 export function normalizePaymentMethods(raw: unknown): PaymentMethod[] {
@@ -79,11 +111,33 @@ export function normalizePaymentMethods(raw: unknown): PaymentMethod[] {
         account_name,
         account_number,
         qr_code_url,
+        show_account: boolOrDefault(r.show_account, true),
+        show_account_name: boolOrDefault(r.show_account_name, true),
+        show_account_number: boolOrDefault(r.show_account_number, true),
+        show_qr: boolOrDefault(r.show_qr, true),
       };
     })
     .filter((m): m is PaymentMethod => m != null);
 
-  return methods.slice(0, MAX_PAYMENT_ACCOUNTS);
+  return ensureSingleShownAccount(methods.slice(0, MAX_PAYMENT_ACCOUNTS));
+}
+
+/** What friends see when settling — respects per-field show toggles. */
+export function toSharedPaymentMethods(methods: PaymentMethod[]): PaymentMethod[] {
+  return methods
+    .filter((m) => m.show_account)
+    .map((m) => ({
+      ...m,
+      account_name: m.show_account_name ? m.account_name : "",
+      account_number: m.show_account_number ? m.account_number : "",
+      qr_code_url: m.show_qr ? m.qr_code_url : null,
+    }))
+    .filter(
+      (m) =>
+        Boolean(m.account_name) ||
+        Boolean(m.account_number) ||
+        Boolean(m.qr_code_url)
+    );
 }
 
 export function paymentMethodDisplayLabel(m: PaymentMethod): string {
@@ -98,4 +152,48 @@ export function paymentMethodCopyText(m: PaymentMethod): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/** Resolve a public QR URL from storage when the profile field is missing. */
+export async function resolvePaymentQrUrl(
+  supabase: SupabaseClient,
+  userId: string,
+  accountId: string,
+  existingUrl: string | null
+): Promise<string | null> {
+  if (existingUrl?.trim()) return existingUrl.trim();
+
+  const { data: files } = await supabase.storage
+    .from("payment-qr")
+    .list(userId, { limit: 100 });
+  const images = (files ?? []).filter((f) =>
+    /\.(png|jpe?g|webp|gif)$/i.test(f.name)
+  );
+  const match =
+    images.find((f) => f.name.startsWith(`${accountId}.`)) ??
+    (images.length === 1 ? images[0] : undefined);
+  if (match) {
+    const {
+      data: { publicUrl },
+    } = supabase.storage
+      .from("payment-qr")
+      .getPublicUrl(`${userId}/${match.name}`);
+    if (publicUrl) return publicUrl;
+  }
+
+  // list() can fail under RLS — probe common paths directly
+  for (const ext of ["png", "jpg", "jpeg", "webp", "gif"]) {
+    const path = `${userId}/${accountId}.${ext}`;
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("payment-qr").getPublicUrl(path);
+    try {
+      const res = await fetch(publicUrl, { method: "HEAD" });
+      if (res.ok) return publicUrl;
+    } catch {
+      /* keep trying */
+    }
+  }
+
+  return null;
 }

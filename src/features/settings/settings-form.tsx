@@ -18,6 +18,7 @@ import {
   MAX_PAYMENT_ACCOUNTS,
   createEmptyPaymentMethod,
   normalizePaymentMethods,
+  ensureSingleShownAccount,
   type PaymentMethod,
   type PaymentMethodType,
 } from "@/lib/payment-methods";
@@ -147,19 +148,19 @@ export function SettingsForm() {
     }
   }
 
-  async function savePayout() {
-    if (paymentMethods.length > 0) {
-      const incomplete = paymentMethods.filter(
+  async function persistPayout(methods: PaymentMethod[], successMessage: string) {
+    if (methods.length > 0) {
+      const incomplete = methods.filter(
         (m) => !m.account_name.trim() || !m.account_number.trim()
       );
       if (incomplete.length) {
         toast.error("Each account needs an account name and account number");
-        return;
+        return false;
       }
     }
     setSavingPayout(true);
     try {
-      const cleaned = normalizePaymentMethods(paymentMethods);
+      const cleaned = normalizePaymentMethods(methods);
       const res = await fetch("/api/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -168,12 +169,18 @@ export function SettingsForm() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Save failed");
       setPaymentMethods(normalizePaymentMethods(json.data.profile?.payment_methods));
-      toast.success("Payout accounts saved");
+      toast.success(successMessage);
+      return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed");
+      return false;
     } finally {
       setSavingPayout(false);
     }
+  }
+
+  async function savePayout() {
+    await persistPayout(paymentMethods, "Payout accounts saved");
   }
 
   function addPaymentMethod() {
@@ -181,20 +188,27 @@ export function SettingsForm() {
       toast.error(`You can add up to ${MAX_PAYMENT_ACCOUNTS} receiving accounts`);
       return;
     }
-    setPaymentMethods((prev) => [...prev, createEmptyPaymentMethod("bank")]);
+    const next = createEmptyPaymentMethod("bank");
+    // Only one account can be shown — new ones stay private until selected
+    next.show_account = paymentMethods.every((m) => !m.show_account);
+    setPaymentMethods((prev) => [...prev, next]);
   }
 
   function updatePaymentMethod(index: number, patch: Partial<PaymentMethod>) {
-    setPaymentMethods((prev) =>
-      prev.map((m, i) => {
+    setPaymentMethods((prev) => {
+      const updated = prev.map((m, i) => {
         if (i !== index) return m;
         const next = { ...m, ...patch };
         if (patch.type && patch.bank_name === undefined && !m.bank_name) {
           next.bank_name = PAYMENT_METHOD_LABELS[patch.type];
         }
         return next;
-      })
-    );
+      });
+      if (patch.show_account === true) {
+        return ensureSingleShownAccount(updated, updated[index]?.id);
+      }
+      return updated;
+    });
   }
 
   async function uploadQr(index: number, file: File) {
@@ -208,8 +222,17 @@ export function SettingsForm() {
       const res = await fetch("/api/payment-qr", { method: "POST", body: form });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Upload failed");
-      updatePaymentMethod(index, { qr_code_url: json.data.url as string });
-      toast.success("QR uploaded — save payout accounts to keep it");
+      const url = json.data.url as string;
+      const nextMethods = ensureSingleShownAccount(
+        paymentMethods.map((m, i) =>
+          i === index
+            ? { ...m, qr_code_url: url, show_qr: true, show_account: true }
+            : m
+        ),
+        account.id
+      );
+      setPaymentMethods(nextMethods);
+      await persistPayout(nextMethods, "QR saved on this payout account");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "QR upload failed");
     } finally {
@@ -363,8 +386,8 @@ export function SettingsForm() {
           <CardHeader>
             <CardTitle>Receiving accounts</CardTitle>
             <CardDescription>
-              Add up to {MAX_PAYMENT_ACCOUNTS} accounts. Friends see the account name,
-              number, and QR when you paid a shared bill.
+              Add up to {MAX_PAYMENT_ACCOUNTS} accounts. Only one can be shown to
+              friends — pick which, and which details (name, number, QR).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -511,6 +534,77 @@ export function SettingsForm() {
                       )}
                     </label>
                   )}
+                </div>
+
+                <div className="space-y-3 rounded-xl border border-border/70 bg-muted/20 px-3 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">Show this account</p>
+                      <p className="text-xs text-muted-foreground">
+                        Only one account can be shown at a time
+                      </p>
+                    </div>
+                    <Switch
+                      checked={m.show_account}
+                      onCheckedChange={(v) =>
+                        updatePaymentMethod(index, { show_account: v })
+                      }
+                    />
+                  </div>
+                  {m.show_account ? (
+                    <div className="space-y-2.5 border-t border-border/60 pt-3">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Friends can see
+                      </p>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor={`show-name-${index}`} className="font-normal">
+                          Account name
+                        </Label>
+                        <Switch
+                          id={`show-name-${index}`}
+                          checked={m.show_account_name}
+                          onCheckedChange={(v) =>
+                            updatePaymentMethod(index, { show_account_name: v })
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor={`show-number-${index}`} className="font-normal">
+                          Account number
+                        </Label>
+                        <Switch
+                          id={`show-number-${index}`}
+                          checked={m.show_account_number}
+                          onCheckedChange={(v) =>
+                            updatePaymentMethod(index, {
+                              show_account_number: v,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor={`show-qr-${index}`} className="font-normal">
+                          QR code
+                        </Label>
+                        <Switch
+                          id={`show-qr-${index}`}
+                          checked={m.show_qr}
+                          disabled={!m.qr_code_url}
+                          onCheckedChange={(v) =>
+                            updatePaymentMethod(index, { show_qr: v })
+                          }
+                        />
+                      </div>
+                      {!m.show_account_name &&
+                      !m.show_account_number &&
+                      !m.show_qr ? (
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          Turn on at least one detail, or friends won’t see how to
+                          pay.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}

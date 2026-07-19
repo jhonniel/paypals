@@ -2,6 +2,9 @@ import { d, moneyNumber } from "@/lib/money";
 
 export type SplitMethod = "equal" | "percentage" | "quantity" | "custom" | "weighted";
 
+/** Who the item total is divided among (owner-configured). */
+export type ItemSplitMode = "among_claimers" | "among_group" | "among_n";
+
 export type AssignmentInput = {
   memberId: string;
   splitMethod: SplitMethod;
@@ -21,6 +24,10 @@ export type ItemSplitInput = {
   itemTotal: number;
   itemQuantity: number;
   assignments: AssignmentInput[];
+  /** Default among_claimers */
+  splitMode?: ItemSplitMode | null;
+  /** Used when splitMode === among_n */
+  splitN?: number | null;
 };
 
 export type MemberShare = {
@@ -129,8 +136,41 @@ function allocateWeighted(
 export function splitItemAmount(
   itemTotal: number,
   itemQuantity: number,
-  assignments: AssignmentInput[]
+  assignments: AssignmentInput[],
+  options?: {
+    splitMode?: ItemSplitMode | null;
+    splitN?: number | null;
+    groupMemberIds?: string[];
+  }
 ): Map<string, number> {
+  const mode = options?.splitMode ?? "among_claimers";
+  const groupIds = options?.groupMemberIds ?? [];
+
+  // Whole-group: charge everyone equally, ignore claim list for the pool
+  if (mode === "among_group") {
+    const pool = resolveItemSplitPool(
+      mode,
+      assignments.map((a) => a.memberId),
+      groupIds,
+      options?.splitN
+    );
+    if (pool.memberIds.length === 0) return new Map();
+    return allocateEqual(itemTotal, pool.memberIds);
+  }
+
+  // Fixed N-way split: each share is total/N; claimers can take multiple shares
+  if (mode === "among_n") {
+    const n = Math.max(1, Math.floor(Number(options?.splitN) || 1));
+    if (assignments.length === 0) return new Map();
+    const map = new Map<string, number>();
+    for (const a of assignments) {
+      const shares = Math.max(0, Number(a.shareQuantity ?? 1));
+      const amt = moneyNumber(d(itemTotal).mul(shares).div(n));
+      map.set(a.memberId, (map.get(a.memberId) ?? 0) + amt);
+    }
+    return map;
+  }
+
   if (assignments.length === 0) return new Map();
 
   const method = assignments[0]?.splitMethod ?? "equal";
@@ -201,7 +241,103 @@ export type SplitOptions = {
    * across these people — even if they claimed no items.
    */
   equalServiceChargeMemberIds?: string[];
+  /** All group member IDs — used for items with split_mode = among_group */
+  groupMemberIds?: string[];
 };
+
+/**
+ * Resolve who pays and the divisor for an item's equal split.
+ * - among_claimers: ÷ number of people who claimed
+ * - among_group: ÷ every group member (auto-includes all)
+ * - among_n: ÷ owner-set N; each claimed share pays total/N (one person can take 2+ shares)
+ */
+export function resolveItemSplitPool(
+  mode: ItemSplitMode | null | undefined,
+  claimedMemberIds: string[],
+  groupMemberIds: string[],
+  splitN: number | null | undefined
+): { memberIds: string[]; divisor: number } {
+  const claimed = [...new Set(claimedMemberIds.filter(Boolean))];
+  const group = [...new Set(groupMemberIds.filter(Boolean))];
+
+  if (mode === "among_group") {
+    const ids = group.length ? group : claimed;
+    return { memberIds: ids, divisor: Math.max(ids.length, 1) };
+  }
+
+  if (mode === "among_n") {
+    const n = Math.max(1, Math.floor(Number(splitN) || claimed.length || 1));
+    return { memberIds: claimed, divisor: n };
+  }
+
+  // among_claimers (default)
+  return { memberIds: claimed, divisor: Math.max(claimed.length, 1) };
+}
+
+/**
+ * How many shares/slots exist for claiming.
+ * null = unlimited (shared — stays visible while units remain).
+ * among_n: N shares (one person may take several).
+ * Default / unset = 1 (one person — hide after claimed).
+ */
+export function itemClaimSlots(
+  mode: ItemSplitMode | null | undefined,
+  splitN?: number | null
+): number | null {
+  if (mode === "among_group") return null;
+  if (mode === "among_claimers") return null; // shared on purpose
+  if (mode === "among_n") return Math.max(1, Math.floor(Number(splitN) || 1));
+  // Unset / legacy → one person only (hide when claimed)
+  return 1;
+}
+
+/** True when this member should not see the item (taken by others). */
+export function isItemHiddenFromMember(
+  mode: ItemSplitMode | null | undefined,
+  splitN: number | null | undefined,
+  claimerIds: string[],
+  myMemberId: string | null | undefined,
+  opts?: { remainingQuantity?: number | null; itemQuantity?: number | null }
+): boolean {
+  if (myMemberId && claimerIds.includes(myMemberId)) return false;
+
+  const remaining = opts?.remainingQuantity;
+  if (remaining != null && remaining <= 0) return true;
+
+  const slots = itemClaimSlots(mode, splitN);
+  if (slots == null) {
+    // Shared / quantity pool — hide only when nothing left
+    return remaining != null ? remaining <= 0 : false;
+  }
+
+  // Multi-way among_n: remainingQuantity is remaining shares
+  if (mode === "among_n" && slots > 1) {
+    return remaining != null ? remaining <= 0 : false;
+  }
+
+  return claimerIds.length >= slots;
+}
+
+export function itemSplitModeLabel(
+  mode: ItemSplitMode | null | undefined,
+  splitN?: number | null,
+  groupSize?: number
+): string {
+  if (mode === "among_group") {
+    return groupSize
+      ? `Split equally among all ${groupSize} members`
+      : "Split equally among the whole group";
+  }
+  if (mode === "among_claimers") {
+    return "Split among whoever claims";
+  }
+  if (mode === "among_n") {
+    const n = Number(splitN) || 1;
+    if (n <= 1) return "One person only";
+    return `Split ${n} ways`;
+  }
+  return "One person only";
+}
 
 function ensureMember(
   memberMap: Map<string, MemberShare>,
@@ -241,7 +377,12 @@ export function computeMemberSplits(
     const shares = splitItemAmount(
       item.itemTotal,
       item.itemQuantity,
-      item.assignments
+      item.assignments,
+      {
+        splitMode: item.splitMode,
+        splitN: item.splitN,
+        groupMemberIds: options?.groupMemberIds,
+      }
     );
     let itemAssigned = d(0);
     shares.forEach((amount, memberId) => {

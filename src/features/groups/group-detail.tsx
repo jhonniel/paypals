@@ -16,16 +16,25 @@ import {
   ArrowRight,
   X,
   ZoomIn,
+  Upload,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
 import { publicEnv } from "@/lib/env";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
+import { readApiJson } from "@/lib/api-client";
+import {
+  paymentMethodDisplayLabel,
+  type PaymentMethod,
+} from "@/lib/payment-methods";
+import { cn } from "@/utils/cn";
 
 type Member = {
   id: string;
@@ -67,6 +76,15 @@ type GroupReceipt = {
     quantity: number;
     unit_price: number;
     total_price: number;
+    split_mode?: string | null;
+    split_n?: number | null;
+    claimer_ids?: string[];
+    claimed_by?: string[];
+    claimed_quantity?: number;
+    remaining_quantity?: number;
+    claims?: Array<{ member_id: string; name: string; quantity: number }>;
+    claimers_hidden?: boolean;
+    others_claim_count?: number;
   }>;
 };
 
@@ -77,13 +95,52 @@ type GroupDetail = {
     description: string | null;
     invite_code: string;
     created_by: string;
+    members_visible_to_group?: boolean;
   };
   members: Member[];
+  member_count?: number;
   receipts: GroupReceipt[];
   pending_claim_receipts?: GroupReceipt[];
   must_claim_before_view?: boolean;
   my_role: string | null;
   my_member_id?: string | null;
+  members_visible_to_group?: boolean;
+  can_manage_members?: boolean;
+  my_payment?: {
+    total: number;
+    currency: string;
+    receipts: Array<{
+      receipt_id: string;
+      merchant: string | null;
+      amount: number;
+      currency: string;
+    }>;
+  } | null;
+  member_payments?: Array<{
+    member_id: string;
+    total: number;
+    currency: string;
+    items: Array<{
+      name: string;
+      quantity: number;
+      amount: number;
+      merchant: string | null;
+    }>;
+  }>;
+  where_to_pay?: Array<{
+    member_id: string;
+    name: string;
+    methods: PaymentMethod[];
+  }>;
+  payment_proofs?: Array<{
+    member_id: string;
+    status: string;
+    expected_amount: number;
+    ocr_amount: number | null;
+    ocr_date: string | null;
+    validated_at: string | null;
+    rejection_reason: string | null;
+  }>;
   invite_url: string;
 };
 
@@ -128,7 +185,13 @@ function formatReceiptWhen(date: string | null, time: string | null) {
 
 const PREVIEW_ITEMS = 5;
 
-function GroupReceiptCard({ receipt: r }: { receipt: GroupReceipt }) {
+function GroupReceiptCard({
+  receipt: r,
+  onPickItems,
+}: {
+  receipt: GroupReceipt;
+  onPickItems?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [imageBroken, setImageBroken] = useState(false);
@@ -209,23 +272,53 @@ function GroupReceiptCard({ receipt: r }: { receipt: GroupReceipt }) {
 
       {r.items.length > 0 ? (
         <div className="mt-3 max-w-lg">
-          <ul className="space-y-1">
-            {visible.map((item) => (
-              <li
-                key={item.id}
-                className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2 text-sm"
-              >
-                <span className="truncate font-medium">
-                  {titleCaseItem(item.name)}
-                </span>
-                <span className="tabular-nums text-xs text-muted-foreground">
-                  {item.quantity !== 1 ? `×${item.quantity}` : ""}
-                </span>
-                <span className="min-w-[4.75rem] text-right tabular-nums text-muted-foreground">
-                  {money(item.total_price, currency)}
-                </span>
-              </li>
-            ))}
+          <ul className="space-y-2">
+            {visible.map((item) => {
+              const claims = item.claims ?? [];
+              const claimLabel =
+                claims.length > 0
+                  ? claims
+                      .map((c) =>
+                        c.quantity > 1 ? `${c.name} ×${c.quantity}` : c.name
+                      )
+                      .join(", ")
+                  : (item.claimed_by ?? []).join(", ");
+              const isGroupSplit = item.split_mode === "among_group";
+              const othersN = item.others_claim_count ?? 0;
+              const claimLine = isGroupSplit
+                ? "Split with whole group"
+                : claimLabel
+                  ? othersN > 0
+                    ? "You claimed this · others also claimed"
+                    : `Claimed by ${claimLabel}`
+                  : othersN > 0 || item.claimers_hidden
+                    ? "Already claimed"
+                    : "Not claimed yet";
+              return (
+                <li key={item.id} className="text-sm">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2">
+                    <span className="truncate font-medium">
+                      {titleCaseItem(item.name)}
+                    </span>
+                    <span className="tabular-nums text-xs text-muted-foreground">
+                      {item.quantity !== 1 ? `×${item.quantity}` : ""}
+                    </span>
+                    <span className="min-w-[4.75rem] text-right tabular-nums text-muted-foreground">
+                      {money(item.total_price, currency)}
+                    </span>
+                  </div>
+                  <p
+                    className={
+                      claimLabel || isGroupSplit
+                        ? "mt-0.5 truncate text-[11px] text-muted-foreground"
+                        : "mt-0.5 text-[11px] italic text-muted-foreground/70"
+                    }
+                  >
+                    {claimLine}
+                  </p>
+                </li>
+              );
+            })}
           </ul>
 
           {hiddenCount > 0 && (
@@ -244,18 +337,6 @@ function GroupReceiptCard({ receipt: r }: { receipt: GroupReceipt }) {
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-2 border-t border-border pt-3">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground sm:grid-cols-[auto_auto]">
-          <dt>Subtotal</dt>
-          <dd className="tabular-nums text-right sm:text-left">
-            {money(Number(r.subtotal), currency)}
-          </dd>
-          {Number(r.tax) > 0 && (
-            <>
-              <dt>Tax</dt>
-              <dd className="tabular-nums text-right sm:text-left">
-                {money(Number(r.tax), currency)}
-              </dd>
-            </>
-          )}
           {Number(r.discount) > 0 && (
             <>
               <dt>Discount</dt>
@@ -280,13 +361,23 @@ function GroupReceiptCard({ receipt: r }: { receipt: GroupReceipt }) {
               </dd>
             </>
           )}
+          <dt className="font-medium text-foreground">Amount due</dt>
+          <dd className="font-semibold tabular-nums text-right text-foreground sm:text-left">
+            {money(Number(r.total), currency)}
+          </dd>
         </dl>
 
-        <Button variant="outline" size="sm" asChild className="h-8">
-          <Link href={`/receipts/${r.id}#split`}>
+        {onPickItems ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8"
+            onClick={onPickItems}
+          >
             Pick what you got <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
-        </Button>
+          </Button>
+        ) : null}
       </div>
 
       {lightboxOpen && showImage && r.image_url && (
@@ -343,9 +434,9 @@ export function GroupDetailView({
     queryKey: ["group", groupId],
     queryFn: async () => {
       const res = await fetch(`/api/groups/${groupId}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load");
-      return json.data as GroupDetail;
+      const parsed = await readApiJson<{ data: GroupDetail }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      return parsed.data.data;
     },
   });
 
@@ -364,8 +455,17 @@ export function GroupDetailView({
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [claimReceiptId, setClaimReceiptId] = useState<string | null>(null);
+  const [claimForMember, setClaimForMember] = useState<{
+    memberId: string;
+    name: string;
+  } | null>(null);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
-  const canManage = data?.my_role === "owner" || data?.my_role === "admin";
+  const canManage =
+    data?.my_role === "owner" ||
+    data?.my_role === "admin" ||
+    data?.group.created_by === currentUserId;
   const isCreator =
     data?.group.created_by === currentUserId || data?.my_role === "owner";
   const memberUserIds = new Set(
@@ -436,20 +536,20 @@ export function GroupDetailView({
         body: JSON.stringify({
           kind: "guest",
           guest_name: guestName,
-          guest_email: guestEmail,
+          ...(guestEmail.trim() ? { guest_email: guestEmail.trim() } : {}),
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
-      toast.success("Guest added — copy their invite link below");
+      toast.success("Member added — they’ll pick this name when they join");
       setGuestName("");
       setGuestEmail("");
       setInviteModalOpen(false);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
-      if (json.data?.invite_token) {
+      if (json.data?.invite_token && guestEmail.trim()) {
         const url = `${publicEnv.appUrl}/invite/guest/${json.data.invite_token}`;
         await navigator.clipboard.writeText(url).catch(() => null);
-        toast.message("Guest invite link copied");
+        toast.message("Personal invite link copied");
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
@@ -481,6 +581,7 @@ export function GroupDetailView({
   }
 
   async function removeMember(memberId: string) {
+    if (!confirm("Remove this member from the group?")) return;
     setBusy(true);
     try {
       const res = await fetch(
@@ -490,6 +591,92 @@ export function GroupDetailView({
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       toast.success("Removed");
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateMemberRole(memberId: string, role: "admin" | "member") {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/members`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, role }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+      toast.success(role === "admin" ? "Made admin" : "Set as member");
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setMembersVisible(visible: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ members_visible_to_group: visible }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+      toast.success(
+        visible
+          ? "Members can now see everyone’s totals"
+          : "Members only see their own totals"
+      );
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadPaymentProof(file: File) {
+    setUploadingProof(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/groups/${groupId}/payment-proof`, {
+        method: "POST",
+        body: form,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error?.message ?? "Proof rejected");
+      }
+      toast.success("Payment verified — marked as paid");
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Proof upload failed");
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+    } finally {
+      setUploadingProof(false);
+    }
+  }
+
+  async function renameMember(memberId: string, currentName: string) {
+    const next = window.prompt("Name on the bill", currentName)?.trim();
+    if (!next || next === currentName) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/members`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, guest_name: next }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+      toast.success("Name updated");
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
@@ -513,6 +700,8 @@ export function GroupDetailView({
         groupId={groupId}
         groupName={data.group.name}
         receipts={data.pending_claim_receipts!}
+        myMemberId={data.my_member_id}
+        memberCount={data.members.length}
       />
     );
   }
@@ -569,98 +758,413 @@ export function GroupDetailView({
             </div>
           ) : (
             data.receipts.map((r) => (
-              <GroupReceiptCard key={r.id} receipt={r} />
+              <GroupReceiptCard
+                key={r.id}
+                receipt={r}
+                onPickItems={
+                  data.my_member_id
+                    ? () => setClaimReceiptId(r.id)
+                    : undefined
+                }
+              />
             ))
           )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4 sm:p-6">
-          <div className="min-w-0">
-            <CardTitle className="text-base">Members ({data.members.length})</CardTitle>
-            <CardDescription>
-              Guests stay on the bill until they claim their invite
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            className="shrink-0"
-            onClick={() => setInviteModalOpen(true)}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            Invite
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-2 p-4 pt-0">
-          {data.members.map((m) => {
-            const label =
-              m.profiles?.full_name ||
-              m.profiles?.username ||
-              m.guest_name ||
-              m.guest_email ||
-              "Member";
-            const isGuest = Boolean(m.guest_email && !m.user_id);
-            return (
-              <div
-                key={m.id}
-                className="flex flex-col gap-2 rounded-xl bg-muted/40 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+        <CardHeader className="flex flex-col gap-3 space-y-0 p-4 sm:p-6">
+          <div className="flex flex-row items-start justify-between gap-2">
+            <div className="min-w-0">
+              <CardTitle className="text-base">
+                {canManage || data.members_visible_to_group
+                  ? `Members (${data.member_count ?? data.members.length})`
+                  : "Your share"}
+              </CardTitle>
+              <CardDescription>
+                {canManage
+                  ? data.members_visible_to_group
+                    ? "Everyone can see all members’ totals"
+                    : "Members only see their own tile — you see everyone"
+                  : data.members_visible_to_group
+                    ? "Everyone’s totals in this group"
+                    : "Only your total and items are shown"}
+              </CardDescription>
+            </div>
+            {canManage ? (
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setInviteModalOpen(true)}
               >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{label}</p>
-                  <p className="text-xs capitalize text-muted-foreground">
-                    {m.role}
-                    {isGuest ? " · waiting to claim" : ""}
-                    {m.guest_email && m.user_id ? " · claimed guest" : ""}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-1">
-                  {canManage && isGuest && m.invite_token && (
-                    <>
+                <UserPlus className="h-3.5 w-3.5" />
+                Manage
+              </Button>
+            ) : null}
+          </div>
+          {canManage ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Visible to group</p>
+                <p className="text-xs text-muted-foreground">
+                  Let everyone see each member’s pays and items
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(data.members_visible_to_group)}
+                disabled={busy}
+                onCheckedChange={(v) => void setMembersVisible(v)}
+              />
+            </div>
+          ) : null}
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {data.members.map((m) => {
+              const label =
+                m.profiles?.full_name ||
+                m.profiles?.username ||
+                m.guest_name ||
+                m.guest_email ||
+                "Member";
+              const isGuest = Boolean(m.guest_name && !m.user_id);
+              const isMe = m.id === data.my_member_id;
+              const isOwnerSeat = m.role === "owner";
+              const pay = data.member_payments?.find((p) => p.member_id === m.id);
+              const payTotal = pay?.total ?? 0;
+              const payCurrency = pay?.currency ?? "PHP";
+              const items = pay?.items ?? [];
+              const initial = label.trim().charAt(0).toUpperCase() || "?";
+              const proof = data.payment_proofs?.find((p) => p.member_id === m.id);
+              const isPaid =
+                proof?.status === "paid" &&
+                payTotal > 0 &&
+                Math.abs((proof.expected_amount ?? 0) - payTotal) <= 1;
+              return (
+                <div
+                  key={m.id}
+                  className={cn(
+                    "flex flex-col rounded-2xl border p-3",
+                    isMe
+                      ? "border-primary/40 bg-primary/10"
+                      : "border-border/80 bg-muted/30"
+                  )}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div
+                      className={cn(
+                        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+                        isMe
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-foreground"
+                      )}
+                      aria-hidden
+                    >
+                      {initial}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold leading-tight">
+                        {label}
+                        {isMe ? (
+                          <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                            you
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="mt-0.5 truncate text-[11px] capitalize text-muted-foreground">
+                        {m.role}
+                        {isGuest ? " · waiting" : ""}
+                        {m.guest_name && m.user_id
+                          ? ` · as ${m.guest_name}`
+                          : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-xl bg-background/60 px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Pays
+                        </p>
+                        <p className="text-xl font-semibold tabular-nums tracking-tight">
+                          {money(payTotal, payCurrency)}
+                        </p>
+                      </div>
+                      {isPaid ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Paid
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 min-h-0 flex-1">
+                    {items.length > 0 ? (
+                      <ul className="space-y-1">
+                        {items.map((item, idx) => (
+                          <li
+                            key={`${m.id}-${item.name}-${idx}`}
+                            className="flex items-baseline justify-between gap-2 text-[11px]"
+                          >
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {titleCaseItem(item.name)}
+                              {item.quantity > 1 ? ` ×${item.quantity}` : ""}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              {money(item.amount, payCurrency)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px] italic text-muted-foreground/70">
+                        {isGuest ? "Waiting to join" : "No items yet"}
+                      </p>
+                    )}
+                  </div>
+
+                  {isMe && (data.where_to_pay?.length ?? 0) > 0 && payTotal > 0 && (
+                    <div className="mt-2 space-y-2 rounded-xl border border-border/60 bg-background/40 px-3 py-2.5">
+                      {data.where_to_pay!.map((payer) => (
+                        <div key={payer.member_id} className="space-y-2">
+                          {payer.methods.map((method) => (
+                            <div
+                              key={method.id}
+                              className="space-y-3 rounded-lg bg-muted/40 px-3 py-3"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    Send payment to
+                                  </p>
+                                  <p className="text-sm font-semibold leading-tight">
+                                    {payer.name}
+                                  </p>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    Type
+                                  </p>
+                                  <p className="mt-0.5 text-sm font-semibold">
+                                    {paymentMethodDisplayLabel(method)}
+                                  </p>
+                                </div>
+                              </div>
+                              {method.account_number ? (
+                                <div>
+                                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    Account number
+                                  </p>
+                                  <div className="mt-1 flex items-center gap-2">
+                                    <p className="min-w-0 flex-1 break-all font-mono text-base font-semibold tabular-nums tracking-wide">
+                                      {method.account_number}
+                                    </p>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 shrink-0 gap-1.5 px-3 text-sm font-medium"
+                                      onClick={() => {
+                                        const number = method.account_number?.trim();
+                                        if (!number) {
+                                          toast.error("No account number to copy");
+                                          return;
+                                        }
+                                        void navigator.clipboard.writeText(number).then(
+                                          () => toast.success("Number copied"),
+                                          () => toast.error("Could not copy")
+                                        );
+                                      }}
+                                    >
+                                      <Copy className="h-4 w-4" />
+                                      Copy
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : null}
+                              {method.qr_code_url ? (
+                                <div>
+                                  <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    QR code
+                                  </p>
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={method.qr_code_url}
+                                    alt={`Pay ${method.account_name || paymentMethodDisplayLabel(method)} QR`}
+                                    className="mx-auto h-40 w-40 rounded-xl border border-border bg-white object-contain p-2"
+                                  />
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {isMe &&
+                    payTotal > 0 &&
+                    (data.where_to_pay?.length ?? 0) === 0 &&
+                    canManage && (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        Add receiving accounts in{" "}
+                        <Link href="/settings" className="underline">
+                          Settings
+                        </Link>{" "}
+                        so members know where to pay.
+                      </p>
+                    )}
+
+                  {isMe &&
+                    payTotal > 0 &&
+                    (data.where_to_pay?.length ?? 0) === 0 &&
+                    !canManage && (
+                      <p className="mt-2 text-[11px] italic text-muted-foreground/80">
+                        Ask the payer to add their GCash/bank in Settings.
+                      </p>
+                    )}
+
+                  {isMe && payTotal > 0 && !isPaid && (
+                    <div className="mt-2 space-y-1.5">
+                      <label className="flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-3 text-center hover:bg-muted/40">
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="sr-only"
+                          disabled={uploadingProof}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) void uploadPaymentProof(file);
+                            e.target.value = "";
+                          }}
+                        />
+                        {uploadingProof ? (
+                          <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Checking proof…
+                          </span>
+                        ) : (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+                              <Upload className="h-4 w-4" />
+                              Upload payment proof
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              Screenshot must show {money(payTotal, payCurrency)}{" "}
+                              and today’s date (Asia/Manila)
+                            </span>
+                          </>
+                        )}
+                      </label>
+                      {proof?.status === "rejected" && proof.rejection_reason ? (
+                        <p className="text-[11px] text-destructive">
+                          {proof.rejection_reason}
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {canManage && (data.receipts?.length ?? 0) > 0 && (
+                    <div className="mt-2">
                       <Button
                         type="button"
                         size="sm"
-                        variant="outline"
-                        onClick={() => void copyGuestLink(m.invite_token!)}
+                        variant="secondary"
+                        className="h-8 w-full text-xs"
+                        onClick={() =>
+                          setClaimForMember({ memberId: m.id, name: label })
+                        }
                       >
-                        <Copy className="h-3.5 w-3.5" />
-                        Link
+                        Assign items
                       </Button>
-                      {m.guest_email && (
+                    </div>
+                  )}
+
+                  {canManage && !isOwnerSeat && (
+                    <div className="mt-3 flex flex-wrap gap-1 border-t border-border/50 pt-2">
+                      {(isGuest || m.guest_name) && (
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
+                          className="h-7 px-2 text-xs"
+                          disabled={busy}
                           onClick={() =>
-                            emailGuest(
-                              m.guest_email!,
-                              m.invite_token!,
-                              m.guest_name || "there"
+                            void renameMember(m.id, m.guest_name || label)
+                          }
+                        >
+                          Rename
+                        </Button>
+                      )}
+                      {m.user_id && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          disabled={busy}
+                          onClick={() =>
+                            void updateMemberRole(
+                              m.id,
+                              m.role === "admin" ? "member" : "admin"
                             )
                           }
                         >
-                          <Mail className="h-3.5 w-3.5" />
-                          Email
+                          {m.role === "admin" ? "Make member" : "Make admin"}
                         </Button>
                       )}
-                    </>
-                  )}
-                  {canManage && m.role !== "owner" && (
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      aria-label="Remove"
-                      onClick={() => void removeMember(m.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                      {isGuest && m.invite_token && (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => void copyGuestLink(m.invite_token!)}
+                          >
+                            <Copy className="h-3 w-3" />
+                            Link
+                          </Button>
+                          {m.guest_email && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              onClick={() =>
+                                emailGuest(
+                                  m.guest_email!,
+                                  m.invite_token!,
+                                  m.guest_name || "there"
+                                )
+                              }
+                            >
+                              <Mail className="h-3 w-3" />
+                              Email
+                            </Button>
+                          )}
+                        </>
+                      )}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                        disabled={busy}
+                        onClick={() => void removeMember(m.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Remove
+                      </Button>
+                    </div>
                   )}
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
 
@@ -684,6 +1188,81 @@ export function GroupDetailView({
           onClose={() => setInviteModalOpen(false)}
         />
       )}
+
+      {claimReceiptId &&
+        (() => {
+          const receipt = data.receipts.find((r) => r.id === claimReceiptId);
+          if (!receipt) return null;
+          const claimReceipt = {
+            id: receipt.id,
+            merchant: receipt.merchant,
+            currency: receipt.currency,
+            total: receipt.total,
+            uploaded_by: receipt.uploaded_by,
+            items: receipt.items,
+          };
+          return createPortal(
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Pick what you got"
+              className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+              onClick={() => setClaimReceiptId(null)}
+            >
+              <div
+                className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-border bg-background p-4 shadow-2xl sm:rounded-3xl sm:p-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <GroupClaimGate
+                  groupId={groupId}
+                  groupName={data.group.name}
+                  receipts={[claimReceipt]}
+                  myMemberId={data.my_member_id}
+                  memberCount={data.members.length}
+                  variant="modal"
+                  onClose={() => setClaimReceiptId(null)}
+                />
+              </div>
+            </div>,
+            document.body
+          );
+        })()}
+
+      {claimForMember && (data.receipts?.length ?? 0) > 0 &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Assign items for ${claimForMember.name}`}
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+            onClick={() => setClaimForMember(null)}
+          >
+            <div
+              className="max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-border bg-background p-4 shadow-2xl sm:rounded-3xl sm:p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GroupClaimGate
+                groupId={groupId}
+                groupName={data.group.name}
+                receipts={data.receipts.map((r) => ({
+                  id: r.id,
+                  merchant: r.merchant,
+                  currency: r.currency,
+                  total: r.total,
+                  uploaded_by: r.uploaded_by,
+                  items: r.items,
+                }))}
+                myMemberId={data.my_member_id}
+                forMemberId={claimForMember.memberId}
+                forMemberName={claimForMember.name}
+                memberCount={data.members.length}
+                variant="modal"
+                onClose={() => setClaimForMember(null)}
+              />
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
@@ -882,31 +1461,31 @@ function InviteMembersModal({
                 </form>
 
                 <form onSubmit={onAddGuest} className="space-y-2">
-                  <Label>Invite without an account</Label>
+                  <Label>Add a name on the bill</Label>
                   <Input
                     value={guestName}
                     onChange={(e) => onGuestNameChange(e.target.value)}
-                    placeholder="Name"
+                    placeholder="e.g. Morgan, Alex…"
                     required
                   />
                   <Input
                     type="email"
                     value={guestEmail}
                     onChange={(e) => onGuestEmailChange(e.target.value)}
-                    placeholder="email@example.com"
-                    required
+                    placeholder="Email (optional)"
                   />
                   <Button
                     type="submit"
-                    disabled={busy}
+                    disabled={busy || !guestName.trim()}
                     className="w-full"
                     size="sm"
                   >
                     {busy ? <Loader2 className="animate-spin" /> : <UserPlus />}
-                    Add & create invite
+                    Add member
                   </Button>
                   <p className="text-xs text-muted-foreground">
-                    They get a personal link to claim their seat on the bill.
+                    When they join with the group link, they pick this name, then
+                    pick what they ordered.
                   </p>
                 </form>
               </>

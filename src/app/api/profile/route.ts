@@ -14,6 +14,10 @@ const paymentMethodSchema = z.object({
   account_name: z.string().max(120).optional().default(""),
   account_number: z.string().max(64).optional().default(""),
   qr_code_url: z.string().url().nullable().optional(),
+  show_account: z.boolean().optional(),
+  show_account_name: z.boolean().optional(),
+  show_account_number: z.boolean().optional(),
+  show_qr: z.boolean().optional(),
   // legacy fields still accepted then normalized
   label: z.string().max(40).optional(),
   details: z.string().max(200).optional(),

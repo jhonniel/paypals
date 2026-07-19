@@ -14,11 +14,11 @@ import {
 import {
   Receipt,
   Users,
-  UserPlus,
   TrendingUp,
   Upload,
   ArrowRight,
   HandCoins,
+  BadgeCheck,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useDashboard } from "@/hooks/use-dashboard";
@@ -77,21 +77,23 @@ export function DashboardView() {
       icon: TrendingUp,
     },
     {
-      label: "This month",
-      value: money(data.stats.monthlySpend),
-      icon: Receipt,
+      label: "Payments received",
+      value: money(data.stats.totalPaymentsReceived ?? 0),
+      icon: BadgeCheck,
+    },
+    {
+      label: "Received this month",
+      value: money(data.stats.paymentsReceivedThisMonth ?? 0),
+      icon: HandCoins,
     },
     {
       label: "Groups",
       value: String(data.stats.groupsCount),
       icon: Users,
     },
-    {
-      label: "Friends",
-      value: String(data.stats.friendsCount),
-      icon: UserPlus,
-    },
   ];
+
+  const confirmed = data.confirmedPayments ?? [];
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -137,6 +139,68 @@ export function DashboardView() {
         ))}
       </div>
 
+      {confirmed.length > 0 && (
+        <Card className="min-w-0 border-emerald-500/20 bg-emerald-500/[0.03]">
+          <CardHeader className="flex flex-col gap-2 space-y-0 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-xl bg-emerald-500/10 p-2.5 text-emerald-600 dark:text-emerald-400">
+                <BadgeCheck className="h-4 w-4" />
+              </div>
+              <div>
+                <CardTitle className="text-base sm:text-lg">Confirmed payments</CardTitle>
+                <CardDescription className="text-xs sm:text-sm">
+                  Verified proof amounts — received{" "}
+                  {money(data.stats.totalPaymentsReceived ?? 0)}, sent{" "}
+                  {money(data.stats.totalPaymentsSent ?? 0)}
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+            <ul className="divide-y divide-border">
+              {confirmed.slice(0, 8).map((row) => (
+                <li
+                  key={row.id}
+                  className="flex items-center justify-between gap-3 py-3 text-sm"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {row.direction === "received"
+                        ? `${row.fromName} paid you`
+                        : `You paid ${row.toName ?? "payer"}`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {row.groupName}
+                      {row.ocrDate ? ` · ${row.ocrDate}` : ""}
+                      {row.paidAt
+                        ? ` · ${formatDistanceToNow(new Date(row.paidAt), { addSuffix: true })}`
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      className={
+                        row.direction === "received"
+                          ? "font-semibold tabular-nums text-emerald-600 dark:text-emerald-400"
+                          : "font-semibold tabular-nums"
+                      }
+                    >
+                      {row.direction === "received" ? "+" : "−"}
+                      {money(row.amount, row.currency)}
+                    </span>
+                    <Button variant="ghost" size="sm" asChild className="h-8 px-2">
+                      <Link href={`/groups/${row.groupId}`}>
+                        View <ArrowRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       {(data.owedToYou?.length ?? 0) > 0 && (
         <Card className="min-w-0 border-primary/20 bg-primary/[0.03]">
           <CardHeader className="flex flex-col gap-2 space-y-0 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -147,7 +211,7 @@ export function DashboardView() {
               <div>
                 <CardTitle className="text-base sm:text-lg">Owed to you</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">
-                  Friends who haven’t paid you back on bills you covered —{" "}
+                  Still unpaid after confirmed proofs —{" "}
                   {money(data.stats.totalOwedToYou ?? 0)} total
                 </CardDescription>
               </div>
@@ -190,7 +254,7 @@ export function DashboardView() {
           <CardHeader className="p-4 sm:p-6">
             <CardTitle className="text-base sm:text-lg">Monthly spending</CardTitle>
             <CardDescription className="text-xs sm:text-sm">
-              Last six months of your receipt totals
+              Receipt totals and confirmed payments received
             </CardDescription>
           </CardHeader>
           <CardContent className="h-56 px-2 pb-4 sm:h-72 sm:px-6 sm:pb-6">
@@ -200,6 +264,10 @@ export function DashboardView() {
                   <linearGradient id="spend" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.35} />
                     <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="payments" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.35} />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -221,13 +289,23 @@ export function DashboardView() {
                     border: "1px solid var(--border)",
                     borderRadius: 12,
                   }}
-                  formatter={(value) => money(Number(value))}
+                  formatter={(value, name) => [
+                    money(Number(value)),
+                    name === "payments" ? "Payments received" : "Receipts",
+                  ]}
                 />
                 <Area
                   type="monotone"
                   dataKey="total"
                   stroke="var(--primary)"
                   fill="url(#spend)"
+                  strokeWidth={2}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="payments"
+                  stroke="#10b981"
+                  fill="url(#payments)"
                   strokeWidth={2}
                 />
               </AreaChart>

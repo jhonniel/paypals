@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, fail, fromZod, serverError } from "@/lib/api";
-import { safeRedirectPath } from "@/lib/security";
 
 const schema = z.object({
   inviteCode: z.string().min(4).max(64),
@@ -27,17 +26,14 @@ export async function POST(request: Request) {
       return fail(
         result?.reason === "exhausted"
           ? "This invite has reached its limit"
-          : "Invalid invite code",
+          : "Invalid invite code — ask an admin for a signup invite",
         400,
         "INVALID_INVITE"
       );
     }
 
     return ok({
-      redirectTo: safeRedirectPath(
-        result.group_id ? `/groups/${result.group_id}` : "/dashboard",
-        "/dashboard"
-      ),
+      redirectTo: "/dashboard",
     });
   } catch (e) {
     console.error(e);

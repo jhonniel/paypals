@@ -43,7 +43,7 @@ export function ReceiptsList() {
         </div>
         <Button asChild className="w-full sm:w-auto">
           <Link href="/receipts/new">
-            <Plus /> Upload receipt
+            <Plus /> New receipt
           </Link>
         </Button>
       </div>

@@ -66,6 +66,8 @@ const itemSchema = z.object({
   unit_price: z.number().min(0),
   total_price: z.number().min(0),
   sort_order: z.number().int().min(0).optional(),
+  split_mode: z.enum(["among_claimers", "among_group", "among_n"]).optional(),
+  split_n: z.number().int().min(1).max(99).nullable().optional(),
 });
 
 const patchSchema = z.object({
@@ -106,7 +108,7 @@ export async function PATCH(request: Request, { params }: Params) {
 
     const { data: existing } = await supabase
       .from("receipts")
-      .select("id")
+      .select("id, group_id")
       .eq("id", id)
       .eq("created_by", user.id)
       .maybeSingle();
@@ -133,16 +135,78 @@ export async function PATCH(request: Request, { params }: Params) {
       await supabase.from("receipt_items").delete().eq("receipt_id", id);
       if (items.length > 0) {
         const { error: itemsError } = await supabase.from("receipt_items").insert(
-          items.map((item, index) => ({
-            receipt_id: id,
-            name: item.name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total_price: item.total_price,
-            sort_order: item.sort_order ?? index,
-          }))
+          items.map((item, index) => {
+            const mode = item.split_mode ?? "among_n";
+            const splitN =
+              mode === "among_n" ? (item.split_n ?? 1) : mode === "among_group" ? null : null;
+            return {
+              receipt_id: id,
+              name: item.name,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              total_price: item.total_price,
+              sort_order: item.sort_order ?? index,
+              split_mode: mode,
+              split_n: mode === "among_n" ? Math.max(1, splitN ?? 1) : null,
+            };
+          })
         );
-        if (itemsError) return fail(itemsError.message, 400);
+        if (itemsError) {
+          // Migration 011 not applied — save without split columns
+          if (/split_mode|split_n|column/i.test(itemsError.message)) {
+            const { error: fallbackErr } = await supabase.from("receipt_items").insert(
+              items.map((item, index) => ({
+                receipt_id: id,
+                name: item.name,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                sort_order: item.sort_order ?? index,
+              }))
+            );
+            if (fallbackErr) return fail(fallbackErr.message, 400);
+          } else {
+            return fail(itemsError.message, 400);
+          }
+        } else {
+          // Whole-group items: assign every member
+          const groupItems = items.filter((i) => (i.split_mode ?? "among_n") === "among_group");
+          const receiptGroupId =
+            fields.group_id !== undefined ? fields.group_id : existing.group_id;
+          if (groupItems.length && receiptGroupId) {
+            const { data: members } = await supabase
+              .from("group_members")
+              .select("id")
+              .eq("group_id", receiptGroupId);
+            const memberIds = (members ?? []).map((m) => m.id);
+            if (memberIds.length) {
+              const { data: savedItems } = await supabase
+                .from("receipt_items")
+                .select("id, name, sort_order")
+                .eq("receipt_id", id)
+                .order("sort_order");
+              for (const gi of groupItems) {
+                const match = (savedItems ?? []).find(
+                  (s, idx) =>
+                    s.name === gi.name &&
+                    (gi.sort_order ?? items.indexOf(gi)) === (s.sort_order ?? idx)
+                );
+                if (!match) continue;
+                await supabase
+                  .from("receipt_item_assignments")
+                  .delete()
+                  .eq("receipt_item_id", match.id);
+                await supabase.from("receipt_item_assignments").insert(
+                  memberIds.map((memberId) => ({
+                    receipt_item_id: match.id,
+                    member_id: memberId,
+                    split_method: "equal",
+                  }))
+                );
+              }
+            }
+          }
+        }
       }
 
       const computed = computeReceiptTotals({

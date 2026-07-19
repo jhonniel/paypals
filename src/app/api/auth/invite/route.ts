@@ -27,22 +27,27 @@ export async function GET(request: Request) {
       group_id?: string;
     };
 
-    if (!result?.valid) {
+    if (!result?.valid || result.kind !== "app") {
       const messages: Record<string, string> = {
         missing: "Invite code is required",
         disabled: "This invite has been disabled",
         expired: "This invite has expired",
-        exhausted: "This invite has reached its limit",
-        not_found: "Invalid invite code",
+        exhausted: "This invite was already used — ask an admin for a new one",
+        not_found: "Invalid invite code — ask an admin for a signup invite",
       };
-      return fail(messages[result?.reason ?? ""] ?? "Invalid invite code", 400, "INVALID_INVITE");
+      return fail(
+        messages[result?.reason ?? ""] ??
+          "Invalid invite code — ask an admin for a signup invite",
+        400,
+        "INVALID_INVITE"
+      );
     }
 
     return ok({
       valid: true,
-      kind: result.kind,
+      kind: "app",
       label: result.label,
-      groupId: result.group_id ?? null,
+      groupId: null,
     });
   } catch (e) {
     console.error(e);

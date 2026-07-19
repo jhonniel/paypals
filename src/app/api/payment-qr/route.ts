@@ -1,5 +1,6 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { created, fail, unauthorized, serverError } from "@/lib/api";
+import { normalizePaymentMethods } from "@/lib/payment-methods";
 
 export const runtime = "nodejs";
 
@@ -74,6 +75,23 @@ export async function POST(request: Request) {
     const {
       data: { publicUrl },
     } = supabase.storage.from("payment-qr").getPublicUrl(storagePath);
+
+    // Persist URL on the matching payout account when it already exists
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("payment_methods")
+      .eq("id", user.id)
+      .maybeSingle();
+    const methods = normalizePaymentMethods(profile?.payment_methods);
+    if (methods.some((m) => m.id === accountId)) {
+      const next = methods.map((m) =>
+        m.id === accountId ? { ...m, qr_code_url: publicUrl } : m
+      );
+      await supabase
+        .from("profiles")
+        .update({ payment_methods: next })
+        .eq("id", user.id);
+    }
 
     return created({
       account_id: accountId,

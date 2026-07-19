@@ -52,13 +52,13 @@ export function GoogleButton({
       toast.error(
         mode === "signup"
           ? "Enter a valid invite code first"
-          : "Google sign-in is unavailable"
+          : "Sign-in is unavailable"
       );
       return;
     }
 
     if (mode === "signup" && (!inviteCode || inviteCode.trim().length < 4)) {
-      toast.error("Enter a valid invite code before signing up with Google");
+      toast.error("Enter a valid invite code before signing up");
       return;
     }
 

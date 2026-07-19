@@ -25,6 +25,7 @@ export function SignupForm() {
 
   const [inviteLabel, setInviteLabel] = useState<string | null>(null);
   const [checkingInvite, setCheckingInvite] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const {
     register,
@@ -53,12 +54,10 @@ export function SignupForm() {
   useEffect(() => {
     if (!authError) return;
     const messages: Record<string, string> = {
-      invite_required:
-        "Google sign-up needs a valid invite code. Enter your code, then try again.",
-      google_not_registered:
-        "Finish signup with a valid invite code first.",
+      invite_required: "Enter a valid invite code to create your account.",
+      google_not_registered: "Your email is not yet registered.",
     };
-    toast.error(messages[authError] ?? decodeURIComponent(authError));
+    setFormError(messages[authError] ?? decodeURIComponent(authError));
   }, [authError]);
 
   useEffect(() => {
@@ -74,9 +73,7 @@ export function SignupForm() {
           const json = await res.json();
           if (res.ok && json?.data?.valid) {
             setInviteLabel(
-              json.data.kind === "group"
-                ? `Group: ${json.data.label}`
-                : json.data.label || "Invite accepted"
+              json.data.label || "Invite accepted"
             );
           } else {
             setInviteLabel(null);
@@ -89,6 +86,7 @@ export function SignupForm() {
   }, [inviteCode]);
 
   async function onSubmit(values: SignupValues) {
+    setFormError(null);
     try {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
@@ -103,7 +101,7 @@ export function SignupForm() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        toast.error(json?.error?.message ?? "Signup failed");
+        setFormError(json?.error?.message ?? "Signup failed");
         return;
       }
 
@@ -117,7 +115,7 @@ export function SignupForm() {
       router.push(json?.data?.redirectTo ?? next);
       router.refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Network error");
+      setFormError(err instanceof Error ? err.message : "Network error");
     }
   }
 
@@ -126,17 +124,25 @@ export function SignupForm() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-        Paypals is invite-only. Enter a valid invite code to create your account and unlock
-        full access.
+          Paypals is invite-only. Ask an admin for a one-time signup invite. Each code
+          works once. Group invite codes are for joining a group after you sign up.
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {formError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+          >
+            {formError}
+          </div>
+        )}
         <div className="space-y-2">
           <Label htmlFor="inviteCode">Invite code</Label>
           <Input
             id="inviteCode"
             autoComplete="off"
-            placeholder="e.g. PAYPALS or a group invite"
+            placeholder="Your one-time invite code"
             {...register("inviteCode")}
           />
           {checkingInvite && (
@@ -172,7 +178,7 @@ export function SignupForm() {
           disabled={!inviteLabel}
         />
         <p className="-mt-2 text-xs text-muted-foreground">
-          Google signup only works after a valid invite code is entered above.
+          Continue after your invite code is accepted above.
         </p>
 
         <div className="space-y-2">

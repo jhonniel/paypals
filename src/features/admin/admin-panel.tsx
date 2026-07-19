@@ -9,6 +9,7 @@ import {
   Loader2,
   Receipt,
   Shield,
+  TrendingUp,
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,13 @@ type AdminData = {
     ocrSuccessRate: number | null;
     appUrl: string | null;
   };
-  counts: { users: number; receipts: number; groups: number };
+  counts: {
+    users: number;
+    receipts: number;
+    groups: number;
+    totalSpend: number;
+    currency: string;
+  };
   users: Array<{
     id: string;
     email: string | null;
@@ -37,6 +44,8 @@ type AdminData = {
     username: string | null;
     is_admin: boolean;
     created_at: string;
+    totalSpent: number;
+    receiptCount: number;
   }>;
   receipts: Array<{
     id: string;
@@ -76,9 +85,10 @@ export function AdminPanelView() {
   const qc = useQueryClient();
   const [newKey, setNewKey] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
   const [inviteLabel, setInviteLabel] = useState("");
-  const [inviteMaxUses, setInviteMaxUses] = useState("");
+  const [inviteCount, setInviteCount] = useState(1);
+  const [lastCreatedCode, setLastCreatedCode] = useState<string | null>(null);
+  const [lastCreatedCodes, setLastCreatedCodes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -112,6 +122,16 @@ export function AdminPanelView() {
 
   async function toggleAdmin(userId: string, is_admin: boolean) {
     setBusy(true);
+    // Optimistic UI so the switch moves immediately
+    void qc.setQueryData<AdminData>(["admin"], (prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        users: prev.users.map((u) =>
+          u.id === userId ? { ...u, is_admin } : u
+        ),
+      };
+    });
     try {
       const res = await fetch("/api/admin", {
         method: "PATCH",
@@ -121,8 +141,9 @@ export function AdminPanelView() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Update failed");
       toast.success(is_admin ? "Granted admin" : "Removed admin");
-      void qc.invalidateQueries({ queryKey: ["admin"] });
+      await qc.invalidateQueries({ queryKey: ["admin"] });
     } catch (err) {
+      await qc.invalidateQueries({ queryKey: ["admin"] });
       toast.error(err instanceof Error ? err.message : "Update failed");
     } finally {
       setBusy(false);
@@ -178,21 +199,36 @@ export function AdminPanelView() {
     e.preventDefault();
     setBusy(true);
     try {
+      const count = Math.min(50, Math.max(1, Math.floor(inviteCount) || 1));
       const res = await fetch("/api/admin/invites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: inviteCode.trim(),
           label: inviteLabel.trim() || null,
-          max_uses: inviteMaxUses ? Number(inviteMaxUses) : null,
+          count,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Create failed");
-      toast.success("Invite created");
-      setInviteCode("");
+
+      const codes: string[] =
+        Array.isArray(json.data?.codes)
+          ? (json.data.codes as string[])
+          : json.data?.code
+            ? [json.data.code as string]
+            : [];
+
+      setLastCreatedCodes(codes);
+      setLastCreatedCode(codes[0] ?? null);
       setInviteLabel("");
-      setInviteMaxUses("");
+      if (codes.length) {
+        await navigator.clipboard.writeText(codes.join("\n")).catch(() => null);
+      }
+      toast.success(
+        count === 1
+          ? `Invite ${codes[0]} created (copied)`
+          : `${codes.length} invites created (all codes copied)`
+      );
       void refetchInvites();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed");
@@ -256,18 +292,28 @@ export function AdminPanelView() {
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: "Users", value: data.counts.users, icon: Users },
-          { label: "Receipts", value: data.counts.receipts, icon: Receipt },
-          { label: "Groups", value: data.counts.groups, icon: Activity },
+          { label: "Users", value: String(data.counts.users), icon: Users },
+          { label: "Receipts", value: String(data.counts.receipts), icon: Receipt },
+          { label: "Groups", value: String(data.counts.groups), icon: Activity },
+          {
+            label: "Total receipt spend",
+            value: formatPHP(
+              data.counts.totalSpend ?? 0,
+              data.counts.currency ?? "PHP"
+            ),
+            icon: TrendingUp,
+          },
         ].map((s) => (
           <Card key={s.label}>
             <CardContent className="flex items-center gap-3 p-4">
-              <s.icon className="h-4 w-4 text-muted-foreground" />
-              <div>
+              <s.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">{s.label}</p>
-                <p className="text-xl font-semibold tabular-nums">{s.value}</p>
+                <p className="truncate text-xl font-semibold tabular-nums">
+                  {s.value}
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -305,6 +351,12 @@ export function AdminPanelView() {
 
         <TabsContent value="users" className="mt-4">
           <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Users</CardTitle>
+              <CardDescription>
+                Spent is the sum of receipt totals each user uploaded.
+              </CardDescription>
+            </CardHeader>
             <CardContent className="divide-y divide-border p-0">
               {data.users.map((u) => (
                 <div
@@ -316,6 +368,10 @@ export function AdminPanelView() {
                       {u.full_name || u.username || u.email}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+                    <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                      {formatPHP(u.totalSpent ?? 0)} · {u.receiptCount ?? 0} receipt
+                      {(u.receiptCount ?? 0) === 1 ? "" : "s"}
+                    </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground">Admin</span>
@@ -336,77 +392,130 @@ export function AdminPanelView() {
             <CardHeader>
               <CardTitle className="text-base">Signup invites</CardTitle>
               <CardDescription>
-                Share these codes so new users can create accounts. Group invite codes also work.
+                Each code is unique and works once. After someone signs up with it, it
+                can’t be reused. Group invite codes are separate — they only join a group.
               </CardDescription>
             </CardHeader>
             <CardContent className="divide-y divide-border p-0">
               {(signupInvites ?? []).length === 0 ? (
                 <p className="p-4 text-sm text-muted-foreground">No invites yet.</p>
               ) : (
-                (signupInvites ?? []).map((inv) => (
-                  <div
-                    key={inv.id}
-                    className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <p className="font-mono text-sm font-semibold tracking-wide">{inv.code}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {inv.label || "Untitled"} · {inv.use_count}
-                        {inv.max_uses != null ? ` / ${inv.max_uses}` : ""} uses
-                      </p>
+                (signupInvites ?? []).map((inv) => {
+                  const used = inv.use_count >= (inv.max_uses ?? 1) || !inv.enabled;
+                  return (
+                    <div
+                      key={inv.id}
+                      className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <p className="font-mono text-sm font-semibold tracking-wide">
+                          {inv.code}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {inv.label || "Untitled"} ·{" "}
+                          {used ? "Used" : "Unused · single use"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(inv.code).then(
+                              () => toast.success("Copied"),
+                              () => toast.error("Could not copy")
+                            );
+                          }}
+                        >
+                          Copy
+                        </Button>
+                        <span className="text-xs text-muted-foreground">Enabled</span>
+                        <Switch
+                          checked={inv.enabled}
+                          disabled={busy || inv.use_count >= (inv.max_uses ?? 1)}
+                          onCheckedChange={(v) => void toggleInvite(inv.id, v)}
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-muted-foreground">Enabled</span>
-                      <Switch
-                        checked={inv.enabled}
-                        disabled={busy}
-                        onCheckedChange={(v) => void toggleInvite(inv.id, v)}
-                      />
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Create invite</CardTitle>
+              <CardTitle className="text-base">Create signup invites</CardTitle>
+              <CardDescription>
+                Generate one or many unique single-use codes. Each code can only be
+                used once.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={(e) => void createSignupInvite(e)} className="space-y-3">
-                <div className="space-y-2">
-                  <Label htmlFor="invite-code">Code</Label>
-                  <Input
-                    id="invite-code"
-                    value={inviteCode}
-                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
-                    placeholder="TEAMLAUNCH"
-                    required
-                  />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="invite-label">Label (optional)</Label>
+                    <Input
+                      id="invite-label"
+                      value={inviteLabel}
+                      onChange={(e) => setInviteLabel(e.target.value)}
+                      placeholder="e.g. Dinner group batch"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="invite-count">How many codes</Label>
+                    <Input
+                      id="invite-count"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={inviteCount}
+                      onChange={(e) =>
+                        setInviteCount(Number(e.target.value) || 1)
+                      }
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Up to 50 at a time
+                    </p>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="invite-label">Label</Label>
-                  <Input
-                    id="invite-label"
-                    value={inviteLabel}
-                    onChange={(e) => setInviteLabel(e.target.value)}
-                    placeholder="Launch cohort"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="invite-max">Max uses (optional)</Label>
-                  <Input
-                    id="invite-max"
-                    type="number"
-                    min={1}
-                    value={inviteMaxUses}
-                    onChange={(e) => setInviteMaxUses(e.target.value)}
-                    placeholder="Unlimited"
-                  />
-                </div>
-                <Button type="submit" disabled={busy || inviteCode.trim().length < 4}>
+                {lastCreatedCodes.length > 1 ? (
+                  <div className="space-y-2 rounded-lg bg-muted/50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Last batch ({lastCreatedCodes.length} codes)
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(lastCreatedCodes.join("\n"))
+                            .then(
+                              () => toast.success("All codes copied"),
+                              () => toast.error("Could not copy")
+                            );
+                        }}
+                      >
+                        Copy all
+                      </Button>
+                    </div>
+                    <pre className="max-h-40 overflow-y-auto font-mono text-xs font-semibold tracking-wide">
+                      {lastCreatedCodes.join("\n")}
+                    </pre>
+                  </div>
+                ) : lastCreatedCode ? (
+                  <p className="rounded-lg bg-muted/50 px-3 py-2 font-mono text-sm font-semibold tracking-wide">
+                    Last created: {lastCreatedCode}
+                  </p>
+                ) : null}
+                <Button type="submit" disabled={busy}>
                   {busy && <Loader2 className="animate-spin" />}
-                  Create invite
+                  {inviteCount > 1
+                    ? `Generate ${inviteCount} invites`
+                    : "Generate invite"}
                 </Button>
               </form>
             </CardContent>

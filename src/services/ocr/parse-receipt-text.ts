@@ -237,14 +237,18 @@ export function parseReceiptText(
     const amount = moneyOnLine ?? nextMoney;
     if (amount === null) continue;
 
-    if (/amount\s*due/i.test(line) || (/^total\b/i.test(line) && !/sub/i.test(line))) {
+    // Prefer Amount due as the receipt total; do not use VAT/tax in the bill.
+    if (/amount\s*due|balance\s*due|amount\s*payable/i.test(line)) {
+      total = amount;
+    } else if (
+      total === null &&
+      TOTAL_RE.test(line) &&
+      !/sub/i.test(line) &&
+      !TAX_AMOUNT_RE.test(line)
+    ) {
       total = amount;
     } else if (SUBTOTAL_RE.test(line)) {
       subtotal = amount;
-    } else if (/vat\s*amount/i.test(line)) {
-      tax = amount;
-    } else if (TAX_AMOUNT_RE.test(line) && !/vatable|exempt|zero/i.test(line) && tax === null) {
-      tax = amount;
     } else if (TIP_RE.test(line)) {
       tip = amount;
     } else if (DISCOUNT_RE.test(line)) {
@@ -253,6 +257,9 @@ export function parseReceiptText(
       serviceCharge = amount;
     }
   }
+
+  // Never carry tax into Paypals — amount due / item totals are enough
+  tax = null;
 
   let items = dedupeItems(extractPosItems(lines));
   if (items.length < 2) {

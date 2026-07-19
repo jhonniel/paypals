@@ -12,7 +12,7 @@ const addSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("guest"),
-    guest_email: z.string().email(),
+    guest_email: z.union([z.string().email(), z.literal("")]).optional(),
     guest_name: z.string().min(1).max(100),
     role: z.enum(["admin", "member"]).default("member"),
   }),
@@ -49,8 +49,9 @@ export async function POST(request: Request, { params }: Params) {
       if (!profile) return fail("User not found", 404);
       userId = profile.id;
     } else {
-      guestEmail = parsed.data.guest_email;
-      guestName = parsed.data.guest_name;
+      guestName = parsed.data.guest_name.trim();
+      const email = parsed.data.guest_email?.trim();
+      guestEmail = email ? email : null;
     }
 
     const inviteToken = crypto.randomUUID().replace(/-/g, "");
@@ -111,21 +112,56 @@ export async function POST(request: Request, { params }: Params) {
 
 const patchMemberSchema = z.object({
   member_id: z.string().uuid(),
-  role: z.enum(["owner", "admin", "member"]).optional(),
+  role: z.enum(["admin", "member"]).optional(),
+  guest_name: z.string().min(1).max(100).optional(),
 });
 
 export async function PATCH(request: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
-    const { supabase } = auth;
+    const { supabase, user } = auth;
     const { id: groupId } = await params;
     const parsed = patchMemberSchema.safeParse(await request.json());
     if (!parsed.success) return fromZod(parsed.error);
 
+    // Only owner/admin can manage members
+    const { data: me } = await supabase
+      .from("group_members")
+      .select("role")
+      .eq("group_id", groupId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      return fail("Only the group owner or admin can manage members", 403);
+    }
+
+    const { data: target } = await supabase
+      .from("group_members")
+      .select("id, role, user_id, guest_name")
+      .eq("id", parsed.data.member_id)
+      .eq("group_id", groupId)
+      .maybeSingle();
+
+    if (!target) return fail("Member not found", 404);
+    if (target.role === "owner") {
+      return fail("Cannot change the group owner", 400);
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (parsed.data.role) updates.role = parsed.data.role;
+    if (parsed.data.guest_name != null) {
+      updates.guest_name = parsed.data.guest_name.trim();
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return fail("Nothing to update", 400);
+    }
+
     const { data, error } = await supabase
       .from("group_members")
-      .update({ role: parsed.data.role })
+      .update(updates)
       .eq("id", parsed.data.member_id)
       .eq("group_id", groupId)
       .select("*")
@@ -143,10 +179,32 @@ export async function DELETE(request: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
-    const { supabase } = auth;
+    const { supabase, user } = auth;
     const { id: groupId } = await params;
     const memberId = new URL(request.url).searchParams.get("member_id");
     if (!memberId) return fail("member_id required");
+
+    const { data: me } = await supabase
+      .from("group_members")
+      .select("role")
+      .eq("group_id", groupId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      return fail("Only the group owner or admin can remove members", 403);
+    }
+
+    const { data: target } = await supabase
+      .from("group_members")
+      .select("role")
+      .eq("id", memberId)
+      .eq("group_id", groupId)
+      .maybeSingle();
+
+    if (target?.role === "owner") {
+      return fail("Cannot remove the group owner", 400);
+    }
 
     const { error } = await supabase
       .from("group_members")

@@ -188,6 +188,33 @@ export async function computeOwedToYou(
     }))
     .sort((a, b) => b.amount - a.amount);
 
-  const totalOwed = moneyNumber(rows.reduce((s, r) => s + r.amount, 0));
-  return { rows, totalOwed };
+  // Subtract group-level confirmed payments (status = paid)
+  const { data: paidProofs } = await supabase
+    .from("group_payment_proofs")
+    .select("from_member_id, ocr_amount, expected_amount")
+    .eq("status", "paid")
+    .in(
+      "to_member_id",
+      myMemberIds
+    );
+
+  if (paidProofs?.length) {
+    const paidByMember = new Map<string, number>();
+    for (const p of paidProofs) {
+      const amt = moneyNumber(p.ocr_amount ?? p.expected_amount);
+      paidByMember.set(
+        p.from_member_id,
+        moneyNumber((paidByMember.get(p.from_member_id) ?? 0) + amt)
+      );
+    }
+    for (const row of rows) {
+      const paid = paidByMember.get(row.memberId) ?? 0;
+      if (paid <= 0) continue;
+      row.amount = moneyNumber(Math.max(0, row.amount - paid));
+    }
+  }
+
+  const remaining = rows.filter((r) => r.amount > 0);
+  const totalOwed = moneyNumber(remaining.reduce((s, r) => s + r.amount, 0));
+  return { rows: remaining, totalOwed };
 }

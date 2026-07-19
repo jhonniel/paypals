@@ -1,19 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Loader2 } from "lucide-react";
+import { ArrowLeft, Check, Loader2, Minus, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/utils/cn";
+import { readApiJson } from "@/lib/api-client";
+import {
+  isItemHiddenFromMember,
+  itemSplitModeLabel,
+  type ItemSplitMode,
+} from "@/lib/splits";
 
 type ClaimItem = {
   id: string;
   name: string;
   quantity: number;
   total_price: number;
+  split_mode?: string | null;
+  split_n?: number | null;
+  claimer_ids?: string[];
+  claimed_by?: string[];
+  remaining_quantity?: number;
+  claims?: Array<{ member_id: string; name: string; quantity: number }>;
 };
 
 type ClaimReceipt = {
@@ -43,63 +55,249 @@ function softName(name: string) {
 }
 
 /**
- * Blocks the group page until the member confirms picks on each pending receipt.
+ * Claim / re-pick items on receipt(s).
+ * - gate: full-page blocker until first confirm
+ * - modal: edit picks without leaving the group page
  */
 export function GroupClaimGate({
   groupId,
   groupName,
   receipts,
+  myMemberId,
+  forMemberId,
+  forMemberName,
+  memberCount = 1,
+  variant = "gate",
+  onClose,
 }: {
   groupId: string;
   groupName: string;
   receipts: ClaimReceipt[];
+  myMemberId?: string | null;
+  /** When set (owner/admin), picks are saved for this member instead. */
+  forMemberId?: string | null;
+  forMemberName?: string | null;
+  /** Used to estimate whole-group item shares */
+  memberCount?: number;
+  variant?: "gate" | "modal";
+  onClose?: () => void;
 }) {
   const qc = useQueryClient();
+  const isModal = variant === "modal";
+  const claimMemberId = forMemberId || myMemberId;
+  const assigningForOther = Boolean(
+    forMemberId && myMemberId && forMemberId !== myMemberId
+  );
   const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState<Record<string, Set<string>>>({});
+  /** receiptId -> itemId -> quantity claimed by me */
+  const [quantities, setQuantities] = useState<Record<string, Record<string, number>>>(
+    {}
+  );
   const [saving, setSaving] = useState(false);
+  const [seededFor, setSeededFor] = useState<string | null>(null);
 
   const current = receipts[index];
-  const selectedForCurrent = useMemo(() => {
-    if (!current) return new Set<string>();
-    return selected[current.id] ?? new Set<string>();
-  }, [current, selected]);
+
+  // Prefill from this member's existing claims (so re-open shows what they picked)
+  useEffect(() => {
+    if (!current || !claimMemberId) return;
+    if (seededFor === current.id) return;
+    const q: Record<string, number> = {};
+    for (const item of current.items) {
+      const mine = item.claims?.find((c) => c.member_id === claimMemberId);
+      if (mine && mine.quantity > 0) q[item.id] = mine.quantity;
+    }
+    setQuantities((prev) => ({ ...prev, [current.id]: q }));
+    setSeededFor(current.id);
+  }, [current, claimMemberId, seededFor]);
+
+  const qtyForCurrent = useMemo(() => {
+    if (!current) return {} as Record<string, number>;
+    return quantities[current.id] ?? {};
+  }, [current, quantities]);
+
+  const { availableItems, takenItems } = useMemo(() => {
+    if (!current) return { availableItems: [] as ClaimItem[], takenItems: [] as ClaimItem[] };
+    const available: ClaimItem[] = [];
+    const taken: ClaimItem[] = [];
+    for (const item of current.items) {
+      const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+      if (mode === "among_group") {
+        // Always listed (everyone pays) — not a pick
+        available.push(item);
+        continue;
+      }
+
+      const claimers = item.claimer_ids ?? [];
+      const iClaimed = Boolean(claimMemberId && claimers.includes(claimMemberId));
+      const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+      const multiWay = mode === "among_n" && splitN > 1;
+      const takenByOthers = (item.claims ?? [])
+        .filter((c) => !claimMemberId || c.member_id !== claimMemberId)
+        .reduce((sum, c) => sum + Math.max(0, Number(c.quantity) || 0), 0);
+
+      // Prefer shares/units still free for this member (excluding their own claim)
+      let remaining: number;
+      if (multiWay) {
+        remaining = Math.max(0, splitN - takenByOthers);
+      } else if (mode === "among_claimers") {
+        const itemQty = Math.max(0, Number(item.quantity) || 0);
+        remaining =
+          item.remaining_quantity != null
+            ? Math.max(0, Number(item.remaining_quantity) + (iClaimed ? (item.claims?.find(c => c.member_id === claimMemberId)?.quantity ?? 0) : 0))
+            : Math.max(0, itemQty - takenByOthers);
+        // Simpler: units left for me = item qty - others
+        remaining = Math.max(0, itemQty - takenByOthers);
+      } else {
+        // One person: unavailable once anyone else claimed
+        remaining = claimers.length > 0 && !iClaimed ? 0 : Math.max(1, Number(item.quantity) || 1);
+      }
+
+      const hidden = isItemHiddenFromMember(
+        mode,
+        item.split_n ?? 1,
+        claimers,
+        claimMemberId,
+        { remainingQuantity: remaining, itemQuantity: item.quantity }
+      );
+
+      // Fully taken by others → not on the pick list (easy to see what's left)
+      if (hidden && !iClaimed) {
+        taken.push(item);
+        continue;
+      }
+      if (remaining <= 0 && !iClaimed) {
+        taken.push(item);
+        continue;
+      }
+
+      available.push({ ...item, remaining_quantity: remaining });
+    }
+    return { availableItems: available, takenItems: taken };
+  }, [current, claimMemberId]);
 
   const progressLabel = `${Math.min(index + 1, receipts.length)} of ${receipts.length}`;
 
-  function toggleItem(itemId: string) {
+  function sharesTakenByOthers(item: ClaimItem) {
+    const fromClaims = (item.claims ?? [])
+      .filter((c) => !claimMemberId || c.member_id !== claimMemberId)
+      .reduce((sum, c) => sum + Math.max(0, Number(c.quantity) || 0), 0);
+    if ((item.claims?.length ?? 0) > 0) return fromClaims;
+    return Math.max(0, Number(item.claimed_quantity ?? 0));
+  }
+
+  function maxForItem(item: ClaimItem) {
+    const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+    const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+    const multiWay = mode === "among_n" && splitN > 1;
+
+    // Split N ways → remaining shares shrink as others claim (3 → 2 → 1 → 0)
+    if (multiWay) {
+      return Math.max(0, splitN - sharesTakenByOthers(item));
+    }
+
+    const itemQty = Math.max(0, Number(item.quantity) || 0);
+    const remaining =
+      item.remaining_quantity != null
+        ? Math.max(0, Number(item.remaining_quantity))
+        : itemQty;
+    const pool = remaining > 0 ? remaining : itemQty;
+    return Math.max(0, pool);
+  }
+
+  /** One-person split — no share stepper; tap claims the line */
+  function isOnePersonSplit(item: ClaimItem) {
+    const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+    if (mode === "among_group" || mode === "among_claimers") return false;
+    const n = Number(item.split_n) || 1;
+    return n <= 1;
+  }
+
+  /** Split 2+ ways (or open claimers with multiple units) — show share/qty stepper */
+  function showQtyControls(item: ClaimItem) {
+    const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+    const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+    if (mode === "among_n" && splitN > 1) return true;
+    if (mode === "among_claimers") return maxForItem(item) > 1;
+    return false;
+  }
+
+  function setQty(itemId: string, qty: number, max: number) {
     if (!current) return;
-    setSelected((prev) => {
-      const next = new Set(prev[current.id] ?? []);
-      if (next.has(itemId)) next.delete(itemId);
-      else next.add(itemId);
-      return { ...prev, [current.id]: next };
+    const next = Math.max(0, Math.min(max, qty));
+    setQuantities((prev) => {
+      const forReceipt = { ...(prev[current.id] ?? {}) };
+      if (next <= 0) delete forReceipt[itemId];
+      else forReceipt[itemId] = next;
+      return { ...prev, [current.id]: forReceipt };
     });
   }
 
-  async function confirm(nothing = false) {
+  function toggleItem(item: ClaimItem) {
+    if (!current) return;
+    const cur = qtyForCurrent[item.id] ?? 0;
+    const max = maxForItem(item);
+    if (max <= 0) return;
+    if (cur > 0) {
+      setQty(item.id, 0, max);
+    } else if (isOnePersonSplit(item)) {
+      setQty(item.id, max, max);
+    } else {
+      // Multi-way split: start at 1 share; +/- to take more of what's left
+      setQty(item.id, Math.min(1, max), max);
+    }
+  }
+
+  async function confirm() {
     if (!current) return;
     setSaving(true);
     try {
-      const itemIds = nothing ? [] : [...selectedForCurrent];
+      const claims = availableItems
+        .filter((i) => (qtyForCurrent[i.id] ?? 0) > 0)
+        .filter((i) => (i.split_mode ?? "among_n") !== "among_group")
+        .map((i) => ({
+          item_id: i.id,
+          quantity: qtyForCurrent[i.id] ?? 1,
+        }));
+
       const res = await fetch(`/api/receipts/${current.id}/claim`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_ids: itemIds }),
+        body: JSON.stringify({
+          claims,
+          ...(assigningForOther && forMemberId
+            ? { for_member_id: forMemberId }
+            : {}),
+        }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Could not save");
+      const parsed = await readApiJson<{ data: { confirmed: boolean; claimed: number } }>(
+        res
+      );
+      if (!parsed.ok) throw new Error(parsed.message);
 
       toast.success(
-        itemIds.length
-          ? `Saved ${itemIds.length} item${itemIds.length === 1 ? "" : "s"}`
-          : "Marked as nothing for you"
+        assigningForOther
+          ? claims.length
+            ? `Saved picks for ${forMemberName || "member"} — about ${money(payTotal, currency)}`
+            : `Cleared picks for ${forMemberName || "member"}`
+          : claims.length
+            ? `Saved — you pay about ${money(payTotal, currency)} on this receipt`
+            : "Updated picks"
       );
 
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+
+      if (isModal && !assigningForOther) {
+        onClose?.();
+        return;
+      }
+
       if (index + 1 >= receipts.length) {
-        await qc.invalidateQueries({ queryKey: ["group", groupId] });
+        if (isModal) onClose?.();
+        // gate complete — invalidate already refreshed must_claim_before_view
       } else {
         setIndex((i) => i + 1);
+        setSeededFor(null);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save");
@@ -108,35 +306,103 @@ export function GroupClaimGate({
     }
   }
 
-  if (!current) {
-    return (
-      <div className="space-y-4">
-        <Skeletonish />
-      </div>
-    );
+  function shareAmountFor(item: ClaimItem, myQty: number): number {
+    const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+    const total = Number(item.total_price) || 0;
+    if (mode === "among_group") {
+      const n = Math.max(1, memberCount);
+      return total / n;
+    }
+    if (myQty <= 0) return 0;
+    const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+    if (mode === "among_n" && splitN > 1) {
+      return (total * myQty) / splitN;
+    }
+    const qtyOnReceipt = Math.max(0.001, Number(item.quantity) || 1);
+    return (total / qtyOnReceipt) * myQty;
   }
 
-  const currency = current.currency || "PHP";
+  const payTotal = useMemo(() => {
+    let sum = 0;
+    for (const item of availableItems) {
+      const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+      if (mode === "among_group") {
+        sum += shareAmountFor(item, 1);
+        continue;
+      }
+      const myQty = qtyForCurrent[item.id] ?? 0;
+      if (myQty > 0) sum += shareAmountFor(item, myQty);
+    }
+    return sum;
+    // shareAmountFor closes over memberCount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableItems, qtyForCurrent, memberCount]);
+
+  const currency = current?.currency || "PHP";
+  const selectedCount = availableItems.filter(
+    (i) =>
+      (qtyForCurrent[i.id] ?? 0) > 0 &&
+      (i.split_mode ?? "among_n") !== "among_group"
+  ).length;
+  const selectableCount = availableItems.filter(
+    (i) => (i.split_mode ?? "among_n") !== "among_group"
+  ).length;
+
+  if (!current) {
+    return <div className="h-64 animate-pulse rounded-2xl bg-muted/40" />;
+  }
 
   return (
-    <div className="mx-auto w-full max-w-lg space-y-6">
-      <div>
-        <Link
-          href="/groups"
-          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" /> Groups
-        </Link>
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {groupName} · Receipt {progressLabel}
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          Pick what you got
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Tap your items so the split is fair. Confirm each receipt before opening
-          the group.
-        </p>
+    <div className={cn("mx-auto w-full max-w-lg space-y-6", isModal && "space-y-4")}>
+      <div className={cn(isModal && "flex items-start justify-between gap-3")}>
+        {!isModal ? (
+          <Link
+            href="/groups"
+            className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" /> Groups
+          </Link>
+        ) : null}
+        <div className="min-w-0">
+          {!isModal ? (
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {groupName} · Receipt {progressLabel}
+            </p>
+          ) : (
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {groupName}
+              {assigningForOther && receipts.length > 1
+                ? ` · Receipt ${progressLabel}`
+                : ""}
+            </p>
+          )}
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            {assigningForOther
+              ? `Pick for ${forMemberName || "member"}`
+              : isModal
+                ? "Edit what you got"
+                : "Pick what you got"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {assigningForOther
+              ? "Choose what they ordered. They’ll see these items on their share."
+              : isModal
+                ? "Only items still available are listed. Already claimed ones are hidden."
+                : "Only what’s left to claim is listed — taken items stay hidden so you can spot yours easily."}
+          </p>
+        </div>
+        {isModal && onClose ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="shrink-0"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        ) : null}
       </div>
 
       <Card>
@@ -149,75 +415,224 @@ export function GroupClaimGate({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 p-4 pt-0 sm:p-6 sm:pt-0">
-          {current.items.map((item) => {
-            const on = selectedForCurrent.has(item.id);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => toggleItem(item.id)}
-                disabled={saving}
-                className={cn(
-                  "flex w-full items-center justify-between gap-3 rounded-2xl border px-3 py-3 text-left text-sm transition",
-                  on
-                    ? "border-primary bg-primary/10"
-                    : "border-border hover:bg-muted/40"
-                )}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span
-                    className={cn(
-                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
-                      on
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border"
-                    )}
-                  >
-                    {on ? <Check className="h-3.5 w-3.5" /> : null}
-                  </span>
-                  <span className="truncate font-medium">{softName(item.name)}</span>
-                  {item.quantity !== 1 ? (
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      ×{item.quantity}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {money(item.total_price, currency)}
-                </span>
-              </button>
-            );
-          })}
+          {availableItems.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+              Nothing left to pick
+              {takenItems.length > 0
+                ? " — everything else was already claimed."
+                : "."}
+            </p>
+          ) : (
+            availableItems.map((item) => {
+              const myQty = qtyForCurrent[item.id] ?? 0;
+              const on = myQty > 0;
+              const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+              const wholeGroup = mode === "among_group";
+              const splitN = Number(item.split_n) || 1;
+              const isOnePerson = mode === "among_n" && splitN <= 1;
+              const hint = itemSplitModeLabel(mode, item.split_n);
+              const max = maxForItem(item);
+              const qtyOnReceipt = Number(item.quantity);
+              const multiWay = mode === "among_n" && splitN > 1;
+              const sharesLeft = multiWay ? max : null;
+              const remaining = multiWay
+                ? max
+                : (item.remaining_quantity ?? Math.max(0, Number(item.quantity)));
+              const metaParts: string[] = [];
+              if (!isOnePerson) metaParts.push(hint);
+              if (qtyOnReceipt > 1 && !multiWay) {
+                metaParts.push(`${qtyOnReceipt} on receipt`);
+              }
+              if (multiWay && sharesLeft != null && sharesLeft < splitN) {
+                metaParts.push(
+                  `${sharesLeft} of ${splitN} share${splitN === 1 ? "" : "s"} left`
+                );
+              } else if (!multiWay && remaining < qtyOnReceipt) {
+                metaParts.push(`${remaining} left`);
+              }
+              const myShare = wholeGroup
+                ? shareAmountFor(item, 1)
+                : on
+                  ? shareAmountFor(item, myQty)
+                  : 0;
 
-          <div className="flex flex-col gap-2 pt-2">
+              return (
+                <div
+                  key={item.id}
+                  className={cn(
+                    "rounded-2xl border px-3 py-3 text-sm transition",
+                    wholeGroup
+                      ? "border-border bg-muted/20 opacity-90"
+                      : on
+                        ? "border-primary bg-primary/10"
+                        : "border-border"
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!wholeGroup) toggleItem(item);
+                    }}
+                    disabled={saving || wholeGroup || max <= 0}
+                    className="flex w-full flex-col gap-1 text-left"
+                  >
+                    <span className="flex w-full items-center justify-between gap-3">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={cn(
+                            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
+                            wholeGroup || on
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border"
+                          )}
+                        >
+                          {wholeGroup || on ? <Check className="h-3.5 w-3.5" /> : null}
+                        </span>
+                        <span className="truncate font-medium">{softName(item.name)}</span>
+                      </span>
+                      <span className="shrink-0 text-right tabular-nums text-muted-foreground">
+                        {(on || wholeGroup) && myShare > 0 ? (
+                          <>
+                            <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                              You pay
+                            </span>
+                            <span className="font-medium text-foreground">
+                              {money(myShare, currency)}
+                            </span>
+                          </>
+                        ) : (
+                          money(item.total_price, currency)
+                        )}
+                      </span>
+                    </span>
+                    {metaParts.length > 0 && (
+                      <span className="pl-8 text-[11px] text-muted-foreground">
+                        {metaParts.join(" · ")}
+                      </span>
+                    )}
+                    {(item.claims?.length ?? 0) > 0 && !wholeGroup ? (
+                      <span className="pl-8 text-[11px] text-muted-foreground">
+                        Others:{" "}
+                        {item.claims!
+                          .filter((c) => c.member_id !== claimMemberId)
+                          .map((c) => `${c.name} ×${c.quantity}`)
+                          .join(", ") || "—"}
+                      </span>
+                    ) : null}
+                  </button>
+
+                  {on && !wholeGroup && showQtyControls(item) && max > 0 && (
+                    <div className="mt-2 flex items-center justify-between gap-2 pl-8">
+                      <span className="text-xs text-muted-foreground">
+                        Your shares
+                        <span className="text-muted-foreground/80">
+                          {" "}
+                          · {max} left
+                        </span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="outline"
+                          className="h-8 w-8"
+                          disabled={saving || myQty <= 1}
+                          onClick={() => setQty(item.id, myQty - 1, max)}
+                          aria-label="Less"
+                        >
+                          <Minus className="h-3.5 w-3.5" />
+                        </Button>
+                        <span className="min-w-[2rem] text-center text-sm font-semibold tabular-nums">
+                          {myQty}
+                        </span>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="outline"
+                          className="h-8 w-8"
+                          disabled={saving || myQty >= max}
+                          onClick={() => setQty(item.id, myQty + 1, max)}
+                          aria-label="More"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </Button>
+                        <span className="text-xs font-medium tabular-nums text-foreground">
+                          {money(myShare, currency)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          {takenItems.length > 0 && (
+            <details className="rounded-2xl border border-border/60 bg-muted/15 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                Already taken ({takenItems.length}) — hidden from your list
+              </summary>
+              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {takenItems.map((item) => (
+                  <li key={item.id} className="flex justify-between gap-2">
+                    <span className="truncate">{softName(item.name)}</span>
+                    <span className="shrink-0">
+                      {(item.claims ?? [])
+                        .map((c) =>
+                          c.quantity > 1 ? `${c.name} ×${c.quantity}` : c.name
+                        )
+                        .join(", ") ||
+                        (item.claimed_by ?? []).join(", ") ||
+                        "Taken"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          <div className="sticky bottom-0 space-y-2 border-t border-border bg-card pt-3">
+            <div className="flex items-end justify-between gap-3 rounded-2xl bg-primary/10 px-4 py-3">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {assigningForOther
+                    ? `${forMemberName || "They"} pay for this receipt`
+                    : "You pay for this receipt"}
+                </p>
+                <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                  {money(payTotal, currency)}
+                </p>
+              </div>
+              {selectedCount > 0 && (
+                <p className="pb-1 text-xs text-muted-foreground">
+                  {selectedCount} item{selectedCount === 1 ? "" : "s"}
+                </p>
+              )}
+            </div>
             <Button
               className="w-full"
-              onClick={() => void confirm(false)}
-              disabled={saving || selectedForCurrent.size === 0}
+              onClick={() => void confirm()}
+              disabled={
+                saving ||
+                (!isModal && selectableCount > 0 && selectedCount === 0)
+              }
             >
               {saving ? <Loader2 className="animate-spin" /> : null}
-              {selectedForCurrent.size > 0
-                ? `Confirm ${selectedForCurrent.size} item${selectedForCurrent.size === 1 ? "" : "s"}`
-                : "Select your items"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              onClick={() => void confirm(true)}
-              disabled={saving}
-            >
-              I didn’t get anything
+              {selectedCount > 0
+                ? assigningForOther && index + 1 < receipts.length
+                  ? `Save & next · ${money(payTotal, currency)}`
+                  : `Save · ${money(payTotal, currency)}`
+                : selectableCount === 0
+                  ? `Continue · ${money(payTotal, currency)}`
+                  : isModal
+                    ? assigningForOther
+                      ? "Save with no items"
+                      : "Save with no items"
+                    : "Select your items"}
             </Button>
           </div>
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-function Skeletonish() {
-  return (
-    <div className="h-64 animate-pulse rounded-2xl bg-muted/40" />
   );
 }

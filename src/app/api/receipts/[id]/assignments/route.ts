@@ -42,13 +42,23 @@ export async function GET(_req: Request, { params }: Params) {
 
     let members: Array<Record<string, unknown>> = [];
     if (receipt.group_id) {
-      const { data: ms } = await supabase
+      const withPay = await supabase
         .from("group_members")
         .select(
           "id, role, user_id, guest_name, guest_email, profiles:user_id(full_name, username, avatar_url, payment_methods)"
         )
         .eq("group_id", receipt.group_id);
-      members = ms ?? [];
+      if (withPay.error && /payment_methods|column/i.test(withPay.error.message)) {
+        const fallback = await supabase
+          .from("group_members")
+          .select(
+            "id, role, user_id, guest_name, guest_email, profiles:user_id(full_name, username, avatar_url)"
+          )
+          .eq("group_id", receipt.group_id);
+        members = fallback.data ?? [];
+      } else {
+        members = withPay.data ?? [];
+      }
     }
 
     const splitItems: ItemSplitInput[] = (items ?? []).map((item) => ({
@@ -56,6 +66,8 @@ export async function GET(_req: Request, { params }: Params) {
       itemName: item.name,
       itemTotal: Number(item.total_price),
       itemQuantity: Number(item.quantity),
+      splitMode: (item as { split_mode?: ItemSplitInput["splitMode"] }).split_mode ?? "among_claimers",
+      splitN: (item as { split_n?: number | null }).split_n ?? null,
       assignments: (assignments ?? [])
         .filter((a) => a.receipt_item_id === item.id)
         .map(
@@ -79,6 +91,7 @@ export async function GET(_req: Request, { params }: Params) {
       },
       {
         equalServiceChargeMemberIds: members.map((m) => String(m.id)),
+        groupMemberIds: members.map((m) => String(m.id)),
       }
     );
 

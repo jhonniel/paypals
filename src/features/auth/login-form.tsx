@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -14,11 +14,18 @@ import { loginSchema, type LoginValues } from "@/features/auth/schemas";
 import { GoogleButton } from "@/features/auth/google-button";
 import { safeRedirectPath } from "@/lib/security";
 
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  google_not_registered: "Your email is not yet registered.",
+  invite_required: "A valid invite code is required to create an account.",
+  auth_callback: "Sign-in failed. Please try again.",
+};
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = safeRedirectPath(searchParams.get("next"), "/dashboard");
   const authError = searchParams.get("error");
+  const [formError, setFormError] = useState<string | null>(null);
 
   const {
     register,
@@ -32,18 +39,17 @@ export function LoginForm() {
     },
   });
 
-  useEffect(() => {
-    if (!authError) return;
-    const messages: Record<string, string> = {
-      google_not_registered:
-        "Google sign-in is only for existing accounts. Sign up with an invite code first.",
-      invite_required: "A valid invite code is required.",
-      auth_callback: "Google sign-in failed. Please try again.",
-    };
-    toast.error(messages[authError] ?? decodeURIComponent(authError));
+  const authErrorMessage = useMemo(() => {
+    if (!authError) return null;
+    return AUTH_ERROR_MESSAGES[authError] ?? decodeURIComponent(authError);
   }, [authError]);
 
+  useEffect(() => {
+    if (authErrorMessage) setFormError(authErrorMessage);
+  }, [authErrorMessage]);
+
   async function onSubmit(values: LoginValues) {
+    setFormError(null);
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
@@ -54,7 +60,7 @@ export function LoginForm() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        toast.error(json?.error?.message ?? `Login failed (${res.status})`);
+        setFormError(json?.error?.message ?? `Login failed (${res.status})`);
         return;
       }
 
@@ -62,7 +68,7 @@ export function LoginForm() {
       router.push(next);
       router.refresh();
     } catch {
-      toast.error("Network error. Please try again.");
+      setFormError("Network error. Please try again.");
     }
   }
 
@@ -70,7 +76,7 @@ export function LoginForm() {
     <div className="space-y-6">
       <GoogleButton next={next} label="Sign in with Google" mode="login" />
       <p className="-mt-3 text-center text-xs text-muted-foreground">
-        Only for accounts already created with an invite. New here?{" "}
+        New here?{" "}
         <Link href="/signup" className="text-primary hover:underline">
           Sign up with an invite code
         </Link>
@@ -84,6 +90,22 @@ export function LoginForm() {
         </div>
       </div>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {formError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+          >
+            <p>{formError}</p>
+            {formError === "Your email is not yet registered." && (
+              <p className="mt-1 text-xs text-destructive/90">
+                Create an account with an invite code first.{" "}
+                <Link href="/signup" className="font-medium underline underline-offset-2">
+                  Sign up
+                </Link>
+              </p>
+            )}
+          </div>
+        )}
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input id="email" type="email" autoComplete="email" {...register("email")} />

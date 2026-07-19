@@ -4,7 +4,6 @@ import { cookies } from "next/headers";
 import { fromZod, fail, ok, tooManyRequests } from "@/lib/api";
 import { publicEnv } from "@/lib/env";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
-import { safeRedirectPath } from "@/lib/security";
 
 const schema = z.object({
   email: z.string().email(),
@@ -60,14 +59,15 @@ export async function POST(request: Request) {
 
   if (validateError) return fail(validateError.message, 400);
   const invite = validation as { valid?: boolean; kind?: string; group_id?: string; label?: string };
-  if (!invite?.valid) {
-    return fail("A valid invite code is required to create an account", 403, "INVITE_REQUIRED");
+  if (!invite?.valid || invite.kind !== "app") {
+    return fail(
+      "A valid admin invite code is required to create an account",
+      403,
+      "INVITE_REQUIRED"
+    );
   }
 
-  const nextPath =
-    invite.kind === "group" && invite.group_id
-      ? `/groups/${invite.group_id}`
-      : "/dashboard";
+  const nextPath = "/dashboard";
 
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
@@ -84,7 +84,6 @@ export async function POST(request: Request) {
   if (error) return fail(error.message, 400, "SIGNUP_FAILED");
 
   let redeemed = false;
-  let groupId: string | null = invite.group_id ?? null;
 
   if (data.session) {
     const { data: redeemResult, error: redeemError } = await supabase.rpc(
@@ -94,9 +93,8 @@ export async function POST(request: Request) {
     if (redeemError) {
       console.error(redeemError);
     } else {
-      const r = redeemResult as { ok?: boolean; group_id?: string };
+      const r = redeemResult as { ok?: boolean };
       redeemed = Boolean(r?.ok);
-      if (r?.group_id) groupId = r.group_id;
     }
   }
 
@@ -104,10 +102,7 @@ export async function POST(request: Request) {
     user: data.user ? { id: data.user.id, email: data.user.email } : null,
     needsConfirmation: !data.session,
     redeemed,
-    groupId,
-    redirectTo: safeRedirectPath(
-      groupId ? `/groups/${groupId}` : "/dashboard",
-      "/dashboard"
-    ),
+    groupId: null,
+    redirectTo: "/dashboard",
   });
 }

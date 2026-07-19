@@ -10,6 +10,20 @@ export type OwedToYouRow = {
   receiptIds: string[];
 };
 
+export type ConfirmedPaymentRow = {
+  id: string;
+  groupId: string;
+  groupName: string;
+  fromName: string;
+  fromMemberId: string;
+  toName: string | null;
+  amount: number;
+  currency: string;
+  paidAt: string | null;
+  ocrDate: string | null;
+  direction: "received" | "sent";
+};
+
 export type DashboardData = {
   stats: {
     totalExpenses: number;
@@ -19,6 +33,9 @@ export type DashboardData = {
     unreadNotifications: number;
     mostActiveGroup: string | null;
     totalOwedToYou: number;
+    totalPaymentsReceived: number;
+    totalPaymentsSent: number;
+    paymentsReceivedThisMonth: number;
   };
   recentReceipts: Array<{
     id: string;
@@ -38,8 +55,9 @@ export type DashboardData = {
     group_id: string | null;
     receipt_id: string | null;
   }>;
-  monthlyChart: Array<{ label: string; total: number }>;
+  monthlyChart: Array<{ label: string; total: number; payments?: number }>;
   owedToYou: OwedToYouRow[];
+  confirmedPayments: ConfirmedPaymentRow[];
 };
 
 async function fetchDashboard(): Promise<DashboardData> {

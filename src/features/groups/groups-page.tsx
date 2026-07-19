@@ -42,7 +42,6 @@ export function GroupsPageView() {
   const [description, setDescription] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [creating, setCreating] = useState(false);
-  const [joining, setJoining] = useState(false);
 
   async function createGroup(e: React.FormEvent) {
     e.preventDefault();
@@ -77,26 +76,8 @@ export function GroupsPageView() {
       toast.error("Enter a valid invite code");
       return;
     }
-    setJoining(true);
-    try {
-      const res = await fetch("/api/groups/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? "Join failed");
-      toast.success("Joined group");
-      setInviteCode("");
-      setJoinOpen(false);
-      await qc.invalidateQueries({ queryKey: ["groups"] });
-      const groupId = json.data?.group_id;
-      if (groupId) router.push(`/groups/${groupId}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Join failed");
-    } finally {
-      setJoining(false);
-    }
+    // Always use the invite page so name-picking works when seats exist
+    router.push(`/invite/${encodeURIComponent(code)}`);
   }
 
   return (
@@ -153,9 +134,8 @@ export function GroupsPageView() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button type="submit" disabled={joining || inviteCode.trim().length < 4}>
-                  {joining && <Loader2 className="animate-spin" />}
-                  Join group
+                <Button type="submit" disabled={inviteCode.trim().length < 4}>
+                  Continue
                 </Button>
                 <Button type="button" variant="ghost" onClick={() => setJoinOpen(false)}>
                   Cancel

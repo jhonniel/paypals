@@ -40,6 +40,10 @@ export interface PaymentMethod {
   account_name: string;
   account_number: string;
   qr_code_url: string | null;
+  show_account?: boolean;
+  show_account_name?: boolean;
+  show_account_number?: boolean;
+  show_qr?: boolean;
 }
 
 export interface Profile {
