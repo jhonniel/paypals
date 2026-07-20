@@ -165,18 +165,7 @@ export function OAuthCallbackClient() {
           if (r?.ok) {
             clearOAuthHelperCookies();
             try {
-              const { sendAccessConfirmedEmail } = await import(
-                "@/lib/email/notify"
-              );
-              if (user.email) {
-                void sendAccessConfirmedEmail({
-                  to: user.email,
-                  name:
-                    (user.user_metadata?.full_name as string | undefined) ||
-                    (user.user_metadata?.name as string | undefined) ||
-                    null,
-                });
-              }
+              void fetch("/api/auth/access-confirmed", { method: "POST" });
             } catch {
               /* ignore */
             }
