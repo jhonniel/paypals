@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -30,6 +30,19 @@ function go(path: string) {
   window.location.replace(path);
 }
 
+const CODE_LOCK_PREFIX = "paypals_oauth_code:";
+
+function claimOAuthCode(code: string): boolean {
+  try {
+    const key = CODE_LOCK_PREFIX + code;
+    if (sessionStorage.getItem(key)) return false;
+    sessionStorage.setItem(key, "1");
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Completes Google OAuth in the browser and gates invite-only access locally.
  * Does not rely on server cookies (those often fail on mobile).
@@ -37,11 +50,9 @@ function go(path: string) {
 export function OAuthCallbackClient() {
   const searchParams = useSearchParams();
   const [message, setMessage] = useState("Finishing sign-in…");
-  const ran = useRef(false);
 
   useEffect(() => {
-    if (ran.current) return;
-    ran.current = true;
+    let cancelled = false;
 
     async function run() {
       const supabase = createClient();
@@ -68,6 +79,7 @@ export function OAuthCallbackClient() {
         "";
 
       const failToAuth = (errorCode: string) => {
+        if (cancelled) return;
         clearOAuthHelperCookies();
         flashAuthError(errorCode);
         const dest =
@@ -84,11 +96,36 @@ export function OAuthCallbackClient() {
 
       try {
         if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            console.error("exchangeCodeForSession", error.message);
-            failToAuth("auth_callback");
-            return;
+          const claimed = claimOAuthCode(code);
+          if (claimed) {
+            const { error } = await supabase.auth.exchangeCodeForSession(code);
+            if (error) {
+              console.error("exchangeCodeForSession", error.message);
+              // React Strict Mode / remount may race: if a session already exists, continue
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              if (!session) {
+                failToAuth("auth_callback");
+                return;
+              }
+            }
+          } else {
+            // Another run already claimed this code — wait briefly for session
+            for (let i = 0; i < 20; i++) {
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              if (session) break;
+              await new Promise((r) => setTimeout(r, 50));
+            }
+            const {
+              data: { session },
+            } = await supabase.auth.getSession();
+            if (!session) {
+              failToAuth("auth_callback");
+              return;
+            }
           }
         } else {
           const {
@@ -100,6 +137,7 @@ export function OAuthCallbackClient() {
           }
         }
 
+        if (cancelled) return;
         setMessage("Checking your account…");
 
         const {
@@ -194,6 +232,9 @@ export function OAuthCallbackClient() {
     }
 
     void run();
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams]);
 
   return (
