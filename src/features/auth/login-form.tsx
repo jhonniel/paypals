@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
 import { GoogleButton } from "@/features/auth/google-button";
+import { consumeAuthErrorFlash } from "@/lib/auth-error-flash";
 import { safeRedirectPath } from "@/lib/security";
 
 const AUTH_ERROR_MESSAGES: Record<string, string> = {
@@ -34,12 +35,21 @@ function clearAuthErrorCookie() {
   document.cookie = "paypals_auth_error=; Path=/; Max-Age=0; SameSite=Lax";
 }
 
+function resolveErrorCode(queryError: string | null): string | null {
+  return (
+    queryError ||
+    consumeAuthErrorFlash() ||
+    readAuthErrorCookie()
+  );
+}
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = safeRedirectPath(searchParams.get("next"), "/dashboard");
   const authError = searchParams.get("error");
   const [formError, setFormError] = useState<string | null>(null);
+  const [shown, setShown] = useState(false);
 
   const {
     register,
@@ -54,13 +64,15 @@ export function LoginForm() {
   });
 
   useEffect(() => {
-    const code = authError || readAuthErrorCookie();
+    if (shown) return;
+    const code = resolveErrorCode(authError);
     if (!code) return;
     const message = AUTH_ERROR_MESSAGES[code] ?? decodeURIComponent(code);
     setFormError(message);
+    setShown(true);
     toast.error(message);
     clearAuthErrorCookie();
-  }, [authError]);
+  }, [authError, shown]);
 
   async function onSubmit(values: LoginValues) {
     setFormError(null);

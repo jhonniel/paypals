@@ -4,6 +4,13 @@ import { safeRedirectPath } from "@/lib/security";
 import { AUTH_ERROR_COOKIE } from "@/lib/oauth-cookies";
 
 export async function updateSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // OAuth callback must not run getUser() before the browser exchanges the code
+  if (pathname.startsWith("/auth/callback")) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -31,7 +38,6 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const pathname = request.nextUrl.pathname;
   const authError =
     request.nextUrl.searchParams.get("error") ||
     request.cookies.get(AUTH_ERROR_COOKIE)?.value ||
@@ -58,7 +64,13 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/login") || pathname.startsWith("/signup");
 
   // OAuth rejection flash: always allow login/signup to render the error
-  if (authError && isLoginOrSignup) {
+  // (also when hash/query is present — do not bounce to claim-invite)
+  if (
+    isLoginOrSignup &&
+    (authError ||
+      request.nextUrl.searchParams.has("error") ||
+      request.nextUrl.hash.includes("error="))
+  ) {
     return supabaseResponse;
   }
 

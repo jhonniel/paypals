@@ -53,6 +53,10 @@ export function SignupForm() {
 
   useEffect(() => {
     const fromQuery = authError;
+    const fromHash =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.hash.replace(/^#/, "")).get("error")
+        : null;
     const fromCookie =
       typeof document !== "undefined"
         ? document.cookie
@@ -62,16 +66,25 @@ export function SignupForm() {
             .slice(1)
             .join("=")
         : null;
-    const code = fromQuery || (fromCookie ? decodeURIComponent(fromCookie) : null);
+    const code =
+      fromQuery ||
+      fromHash ||
+      (fromCookie ? decodeURIComponent(fromCookie) : null);
     if (!code) return;
     const messages: Record<string, string> = {
       invite_required: "Enter a valid invite code to create your account.",
       google_not_registered: "Your email is not yet registered.",
+      auth_callback: "Sign-in failed. Please try again.",
     };
     const msg = messages[code] ?? decodeURIComponent(code);
     setFormError(msg);
     toast.error(msg);
     document.cookie = "paypals_auth_error=; Path=/; Max-Age=0; SameSite=Lax";
+    if (typeof window !== "undefined" && window.location.hash.includes("error=")) {
+      const url = new URL(window.location.href);
+      url.hash = "";
+      window.history.replaceState(null, "", url.pathname + url.search);
+    }
   }, [authError]);
 
   useEffect(() => {

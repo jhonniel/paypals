@@ -73,31 +73,46 @@ export function GoogleButton({
     }
 
     setLoading(true);
-    const supabase = createClient();
-    const origin = appOrigin();
-    const invite = inviteCode?.trim() || undefined;
+    try {
+      const supabase = createClient();
+      const origin = appOrigin();
+      const invite = inviteCode?.trim() || undefined;
 
-    setOAuthCookies(invite, safeNext, mode);
+      setOAuthCookies(invite, safeNext, mode);
 
-    const callbackParams = new URLSearchParams();
-    callbackParams.set("next", safeNext);
-    callbackParams.set("mode", mode);
-    if (invite) callbackParams.set("invite", invite);
+      const callbackParams = new URLSearchParams();
+      callbackParams.set("next", safeNext);
+      callbackParams.set("mode", mode);
+      if (invite) callbackParams.set("invite", invite);
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        // Use the current origin so mobile / LAN / preview hosts match
-        redirectTo: `${origin}/auth/callback?${callbackParams.toString()}`,
-        queryParams: {
-          access_type: "online",
-          prompt: "select_account",
+      // Manual redirect is more reliable on mobile (in-app browsers / Safari)
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${origin}/auth/callback?${callbackParams.toString()}`,
+          skipBrowserRedirect: true,
+          queryParams: {
+            access_type: "online",
+            prompt: "select_account",
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      toast.error(error.message);
+      if (error) {
+        toast.error(error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (!data?.url) {
+        toast.error("Could not start Google sign-in");
+        setLoading(false);
+        return;
+      }
+
+      window.location.assign(data.url);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Google sign-in failed");
       setLoading(false);
     }
   }

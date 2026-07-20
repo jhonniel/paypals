@@ -1,0 +1,181 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Loader2 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { safeRedirectPath } from "@/lib/security";
+import { flashAuthError } from "@/lib/auth-error-flash";
+
+function readCookie(name: string): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`));
+  if (!match) return "";
+  return decodeURIComponent(match.split("=").slice(1).join("=") || "");
+}
+
+function clearOAuthHelperCookies() {
+  for (const name of [
+    "paypals_oauth_invite",
+    "paypals_oauth_next",
+    "paypals_oauth_mode",
+  ]) {
+    document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+  }
+}
+
+function go(path: string) {
+  window.location.replace(path);
+}
+
+/**
+ * Completes Google OAuth in the browser and gates invite-only access locally.
+ * Does not rely on server cookies (those often fail on mobile).
+ */
+export function OAuthCallbackClient() {
+  const searchParams = useSearchParams();
+  const [message, setMessage] = useState("Finishing sign-in…");
+  const ran = useRef(false);
+
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+
+    async function run() {
+      const supabase = createClient();
+
+      const code = searchParams.get("code");
+      const oauthError =
+        searchParams.get("error_description") ||
+        searchParams.get("error") ||
+        "";
+
+      const modeParam =
+        searchParams.get("mode") || readCookie("paypals_oauth_mode") || "login";
+      const mode = modeParam === "signup" ? "signup" : "login";
+      const next = safeRedirectPath(
+        searchParams.get("next") ||
+          readCookie("paypals_oauth_next") ||
+          "/dashboard",
+        "/dashboard"
+      );
+      const invite =
+        searchParams.get("invite")?.trim() ||
+        searchParams.get("invite_code")?.trim() ||
+        readCookie("paypals_oauth_invite") ||
+        "";
+
+      const failToAuth = (errorCode: string) => {
+        clearOAuthHelperCookies();
+        flashAuthError(errorCode);
+        const dest =
+          mode === "signup"
+            ? `/signup?error=${encodeURIComponent(errorCode)}${invite ? `&invite=${encodeURIComponent(invite)}` : ""}`
+            : `/login?error=${encodeURIComponent(errorCode)}`;
+        go(dest);
+      };
+
+      if (oauthError && !code) {
+        failToAuth("auth_callback");
+        return;
+      }
+
+      try {
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            console.error("exchangeCodeForSession", error.message);
+            failToAuth("auth_callback");
+            return;
+          }
+        } else {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) {
+            failToAuth("auth_callback");
+            return;
+          }
+        }
+
+        setMessage("Checking your account…");
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          failToAuth("auth_callback");
+          return;
+        }
+
+        // Signup path: redeem invite in the browser session
+        if (mode === "signup" && invite) {
+          const { data: redeemed } = await supabase.rpc("redeem_signup_invite", {
+            p_code: invite,
+          });
+          const r = redeemed as { ok?: boolean; group_id?: string } | null;
+          if (r?.ok) {
+            clearOAuthHelperCookies();
+            go(r.group_id ? `/groups/${r.group_id}` : next);
+            return;
+          }
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("invite_verified, is_admin, created_at")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        const verified =
+          Boolean(profile?.invite_verified) || Boolean(profile?.is_admin);
+
+        if (verified) {
+          clearOAuthHelperCookies();
+          go(next);
+          return;
+        }
+
+        // Not registered — sign out locally, then ask server to delete the stub user
+        const errorCode =
+          mode === "signup" ? "invite_required" : "google_not_registered";
+
+        try {
+          await supabase.auth.signOut();
+        } catch {
+          /* ignore */
+        }
+
+        // Best-effort cleanup (service role). Ignore failures.
+        void fetch("/api/auth/oauth-finish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode,
+            invite: invite || undefined,
+            next,
+            cleanupOnly: true,
+            userId: user.id,
+          }),
+        }).catch(() => null);
+
+        failToAuth(errorCode);
+      } catch (e) {
+        console.error(e);
+        failToAuth("auth_callback");
+      }
+    }
+
+    void run();
+  }, [searchParams]);
+
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-3 px-4">
+      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      <p className="text-sm text-muted-foreground">{message}</p>
+    </div>
+  );
+}
