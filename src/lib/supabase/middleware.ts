@@ -3,6 +3,21 @@ import { NextResponse, type NextRequest } from "next/server";
 import { safeRedirectPath } from "@/lib/security";
 import { AUTH_ERROR_COOKIE } from "@/lib/oauth-cookies";
 
+function clearSupabaseCookies(response: NextResponse, request: NextRequest) {
+  for (const c of request.cookies.getAll()) {
+    if (
+      c.name.startsWith("sb-") ||
+      c.name.includes("auth-token") ||
+      c.name.startsWith("supabase")
+    ) {
+      response.cookies.set(c.name, "", {
+        path: "/",
+        maxAge: 0,
+      });
+    }
+  }
+}
+
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
@@ -34,9 +49,22 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user: { id: string } | null = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      // Stale/invalid refresh tokens are common after aborted Google OAuth on mobile.
+      // Never let this crash middleware into a 500.
+      console.warn("[middleware] auth.getUser:", error.message);
+      clearSupabaseCookies(supabaseResponse, request);
+    } else {
+      user = data.user;
+    }
+  } catch (e) {
+    console.warn("[middleware] auth.getUser threw", e);
+    clearSupabaseCookies(supabaseResponse, request);
+    user = null;
+  }
 
   const authError =
     request.nextUrl.searchParams.get("error") ||
@@ -64,12 +92,9 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/login") || pathname.startsWith("/signup");
 
   // OAuth rejection flash: always allow login/signup to render the error
-  // (also when hash/query is present — do not bounce to claim-invite)
   if (
     isLoginOrSignup &&
-    (authError ||
-      request.nextUrl.searchParams.has("error") ||
-      request.nextUrl.hash.includes("error="))
+    (authError || request.nextUrl.searchParams.has("error"))
   ) {
     return supabaseResponse;
   }
@@ -89,23 +114,29 @@ export async function updateSession(request: NextRequest) {
   }
 
   if (user && (isAuthRoute || isClaimInvite || isAppRoute)) {
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("invite_verified, is_admin")
-      .eq("id", user.id)
-      .maybeSingle();
+    let inviteVerified = false;
+    try {
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("invite_verified, is_admin")
+        .eq("id", user.id)
+        .maybeSingle();
 
-    const migrationMissing =
-      profileError?.message?.includes("invite_verified") ||
-      profileError?.code === "42703";
+      const migrationMissing =
+        profileError?.message?.includes("invite_verified") ||
+        profileError?.code === "42703";
 
-    const inviteVerified = migrationMissing
-      ? true
-      : profile == null
-        ? false
-        : profile.invite_verified === undefined
-          ? true
-          : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
+      inviteVerified = migrationMissing
+        ? true
+        : profile == null
+          ? false
+          : profile.invite_verified === undefined
+            ? true
+            : Boolean(profile.invite_verified) || Boolean(profile.is_admin);
+    } catch (e) {
+      console.warn("[middleware] profile lookup failed", e);
+      inviteVerified = false;
+    }
 
     if (!inviteVerified && isAppRoute) {
       const url = request.nextUrl.clone();
@@ -118,7 +149,7 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
 
-    if (user && isAuthRoute && inviteVerified) {
+    if (isAuthRoute && inviteVerified) {
       const next = safeRedirectPath(
         request.nextUrl.searchParams.get("next"),
         "/dashboard"
@@ -126,7 +157,7 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.redirect(new URL(next, request.url));
     }
 
-    if (user && isAuthRoute && !inviteVerified) {
+    if (isAuthRoute && !inviteVerified) {
       return NextResponse.redirect(new URL("/claim-invite", request.url));
     }
   }

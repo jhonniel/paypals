@@ -87,6 +87,7 @@ export function AdminPanelView() {
   const [newDesc, setNewDesc] = useState("");
   const [inviteLabel, setInviteLabel] = useState("");
   const [inviteCount, setInviteCount] = useState(1);
+  const [inviteSendTo, setInviteSendTo] = useState("");
   const [lastCreatedCode, setLastCreatedCode] = useState<string | null>(null);
   const [lastCreatedCodes, setLastCreatedCodes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -206,6 +207,9 @@ export function AdminPanelView() {
         body: JSON.stringify({
           label: inviteLabel.trim() || null,
           count,
+          ...(inviteSendTo.trim()
+            ? { send_to: inviteSendTo.trim() }
+            : {}),
         }),
       });
       const json = await res.json();
@@ -221,14 +225,34 @@ export function AdminPanelView() {
       setLastCreatedCodes(codes);
       setLastCreatedCode(codes[0] ?? null);
       setInviteLabel("");
+      setInviteSendTo("");
       if (codes.length) {
         await navigator.clipboard.writeText(codes.join("\n")).catch(() => null);
       }
-      toast.success(
-        count === 1
-          ? `Invite ${codes[0]} created (copied)`
-          : `${codes.length} invites created (all codes copied)`
-      );
+
+      const emailed = json.data?.emailed as
+        | { sent?: boolean; error?: string }
+        | null
+        | undefined;
+      if (emailed?.sent) {
+        toast.success(
+          count === 1
+            ? `Invite ${codes[0]} created and emailed`
+            : `${codes.length} invites created and emailed`
+        );
+      } else if (emailed && emailed.sent === false) {
+        toast.success(
+          count === 1
+            ? `Invite ${codes[0]} created (email failed: ${emailed.error ?? "SMTP"})`
+            : `${codes.length} invites created (email failed)`
+        );
+      } else {
+        toast.success(
+          count === 1
+            ? `Invite ${codes[0]} created (copied)`
+            : `${codes.length} invites created (all codes copied)`
+        );
+      }
       void refetchInvites();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed");
@@ -479,6 +503,19 @@ export function AdminPanelView() {
                       Up to 50 at a time
                     </p>
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="invite-send-to">Email codes to (optional)</Label>
+                  <Input
+                    id="invite-send-to"
+                    type="email"
+                    value={inviteSendTo}
+                    onChange={(e) => setInviteSendTo(e.target.value)}
+                    placeholder="friend@email.com"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Requires SMTP env vars. Sends the invite code(s) so they can sign up.
+                  </p>
                 </div>
                 {lastCreatedCodes.length > 1 ? (
                   <div className="space-y-2 rounded-lg bg-muted/50 px-3 py-2">

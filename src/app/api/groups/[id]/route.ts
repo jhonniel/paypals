@@ -558,25 +558,31 @@ export async function GET(_req: Request, { params }: Params) {
       ocr_date: string | null;
       validated_at: string | null;
       rejection_reason: string | null;
+      manual: boolean;
     }> = [];
     {
       const proofsQuery = await supabase
         .from("group_payment_proofs")
         .select(
-          "from_member_id, status, expected_amount, ocr_amount, ocr_date, validated_at, rejection_reason"
+          "from_member_id, status, expected_amount, ocr_amount, ocr_date, validated_at, rejection_reason, ocr_raw"
         )
         .eq("group_id", id);
       if (!proofsQuery.error) {
-        payment_proofs = (proofsQuery.data ?? []).map((p) => ({
-          member_id: p.from_member_id,
-          status: p.status,
-          expected_amount: Number(p.expected_amount),
-          ocr_amount: p.ocr_amount != null ? Number(p.ocr_amount) : null,
-          ocr_date: p.ocr_date,
-          validated_at: p.validated_at,
-          rejection_reason: p.rejection_reason,
-        }));
-        if (!membersVisible) {
+        payment_proofs = (proofsQuery.data ?? []).map((p) => {
+          const raw = p.ocr_raw as { source?: string } | null;
+          return {
+            member_id: p.from_member_id,
+            status: p.status,
+            expected_amount: Number(p.expected_amount),
+            ocr_amount: p.ocr_amount != null ? Number(p.ocr_amount) : null,
+            ocr_date: p.ocr_date,
+            validated_at: p.validated_at,
+            rejection_reason: p.rejection_reason,
+            manual: raw?.source === "manual",
+          };
+        });
+        // Managers always see all proofs so they can mark paid; others follow visibility
+        if (!membersVisible && !canManageMembers) {
           payment_proofs = payment_proofs.filter(
             (p) => p.member_id === my?.id
           );

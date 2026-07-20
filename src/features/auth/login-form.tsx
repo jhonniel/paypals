@@ -13,13 +13,12 @@ import { Label } from "@/components/ui/label";
 import { loginSchema, type LoginValues } from "@/features/auth/schemas";
 import { GoogleButton } from "@/features/auth/google-button";
 import { consumeAuthErrorFlash } from "@/lib/auth-error-flash";
+import {
+  AUTH_ERROR_MESSAGES,
+  NOT_SIGNED_UP_HINT,
+  NOT_SIGNED_UP_MESSAGE,
+} from "@/lib/auth-messages";
 import { safeRedirectPath } from "@/lib/security";
-
-const AUTH_ERROR_MESSAGES: Record<string, string> = {
-  google_not_registered: "Your email is not yet registered.",
-  invite_required: "A valid invite code is required to create an account.",
-  auth_callback: "Sign-in failed. Please try again.",
-};
 
 function readAuthErrorCookie(): string | null {
   if (typeof document === "undefined") return null;
@@ -36,11 +35,7 @@ function clearAuthErrorCookie() {
 }
 
 function resolveErrorCode(queryError: string | null): string | null {
-  return (
-    queryError ||
-    consumeAuthErrorFlash() ||
-    readAuthErrorCookie()
-  );
+  return queryError || consumeAuthErrorFlash() || readAuthErrorCookie();
 }
 
 export function LoginForm() {
@@ -86,7 +81,13 @@ export function LoginForm() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setFormError(json?.error?.message ?? `Login failed (${res.status})`);
+        const code = json?.error?.code as string | undefined;
+        const message =
+          code === "NOT_SIGNED_UP" || code === "UNAUTHORIZED"
+            ? (json?.error?.message as string) || NOT_SIGNED_UP_MESSAGE
+            : (json?.error?.message as string) ?? `Login failed (${res.status})`;
+        setFormError(message);
+        toast.error(message);
         return;
       }
 
@@ -98,7 +99,10 @@ export function LoginForm() {
     }
   }
 
-  const notRegistered = formError === "Your email is not yet registered.";
+  const notRegistered =
+    formError === NOT_SIGNED_UP_MESSAGE ||
+    formError?.includes("not signed up") === true ||
+    formError?.includes("invite-only") === true;
 
   return (
     <div className="space-y-6">
@@ -110,12 +114,12 @@ export function LoginForm() {
           <p className="font-medium">{formError}</p>
           {notRegistered && (
             <p className="mt-1 text-xs text-destructive/90">
-              Create an account with an invite code first.{" "}
+              {NOT_SIGNED_UP_HINT}{" "}
               <Link
                 href="/signup"
                 className="font-medium underline underline-offset-2"
               >
-                Sign up
+                Sign up with an invite
               </Link>
             </p>
           )}
@@ -124,9 +128,9 @@ export function LoginForm() {
 
       <GoogleButton next={next} label="Sign in with Google" mode="login" />
       <p className="-mt-3 text-center text-xs text-muted-foreground">
-        New here?{" "}
+        New here? Ask Ygay for an invite, then{" "}
         <Link href="/signup" className="text-primary hover:underline">
-          Sign up with an invite code
+          sign up
         </Link>
       </p>
       <div className="relative">
@@ -177,9 +181,9 @@ export function LoginForm() {
         </Link>
       </p>
       <p className="text-center text-sm text-muted-foreground">
-        New to Paypals?{" "}
+        New to Paypals? Ask Ygay for an invite, then{" "}
         <Link href="/signup" className="text-primary hover:underline">
-          Create an account
+          create an account
         </Link>
       </p>
     </div>

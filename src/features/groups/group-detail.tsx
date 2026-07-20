@@ -140,6 +140,7 @@ type GroupDetail = {
     ocr_date: string | null;
     validated_at: string | null;
     rejection_reason: string | null;
+    manual?: boolean;
   }>;
   invite_url: string;
 };
@@ -461,6 +462,13 @@ export function GroupDetailView({
     name: string;
   } | null>(null);
   const [uploadingProof, setUploadingProof] = useState(false);
+  const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [markPaidConfirm, setMarkPaidConfirm] = useState<{
+    memberId: string;
+    name: string;
+    amountLabel: string;
+    paid: boolean;
+  } | null>(null);
 
   const canManage =
     data?.my_role === "owner" ||
@@ -664,6 +672,27 @@ export function GroupDetailView({
     }
   }
 
+  async function markMemberPaid(memberId: string, paid: boolean) {
+    setMarkingPaidId(memberId);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/mark-paid`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, paid }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+      toast.success(paid ? "Payment confirmed" : "Marked as unpaid");
+      setMarkPaidConfirm(null);
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      await qc.invalidateQueries({ queryKey: ["friends-balances"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setMarkingPaidId(null);
+    }
+  }
+
   async function renameMember(memberId: string, currentName: string) {
     const next = window.prompt("Name on the bill", currentName)?.trim();
     if (!next || next === currentName) return;
@@ -840,7 +869,8 @@ export function GroupDetailView({
               const isPaid =
                 proof?.status === "paid" &&
                 payTotal > 0 &&
-                Math.abs((proof.expected_amount ?? 0) - payTotal) <= 1;
+                (Boolean(proof.manual) ||
+                  Math.abs((proof.expected_amount ?? 0) - payTotal) <= 1);
               return (
                 <div
                   key={m.id}
@@ -896,6 +926,9 @@ export function GroupDetailView({
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           Paid
+                          {proof?.manual ? (
+                            <span className="font-normal opacity-80">· manual</span>
+                          ) : null}
                         </span>
                       ) : null}
                     </div>
@@ -1067,21 +1100,49 @@ export function GroupDetailView({
                     </div>
                   )}
 
-                  {canManage && (data.receipts?.length ?? 0) > 0 && (
-                    <div className="mt-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        className="h-8 w-full text-xs"
-                        onClick={() =>
-                          setClaimForMember({ memberId: m.id, name: label })
-                        }
-                      >
-                        Assign items
-                      </Button>
-                    </div>
-                  )}
+                  {canManage &&
+                    (payTotal > 0 || (data.receipts?.length ?? 0) > 0) && (
+                      <div className="mt-2 flex gap-1.5">
+                        {payTotal > 0 && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={isPaid ? "outline" : "secondary"}
+                            className="h-8 min-w-0 flex-1 px-2 text-[11px]"
+                            disabled={busy || markingPaidId === m.id}
+                            onClick={() =>
+                              setMarkPaidConfirm({
+                                memberId: m.id,
+                                name: label,
+                                amountLabel: money(payTotal, payCurrency),
+                                paid: !isPaid,
+                              })
+                            }
+                          >
+                            {markingPaidId === m.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : isPaid ? (
+                              "Mark unpaid"
+                            ) : (
+                              "Mark as paid"
+                            )}
+                          </Button>
+                        )}
+                        {(data.receipts?.length ?? 0) > 0 && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="h-8 min-w-0 flex-1 px-2 text-[11px]"
+                            onClick={() =>
+                              setClaimForMember({ memberId: m.id, name: label })
+                            }
+                          >
+                            Assign items
+                          </Button>
+                        )}
+                      </div>
+                    )}
 
                   {canManage && !isOwnerSeat && (
                     <div className="mt-3 flex flex-wrap gap-1 border-t border-border/50 pt-2">
@@ -1186,6 +1247,22 @@ export function GroupDetailView({
           onAddUsername={(e) => void addByUsername(e)}
           onAddGuest={(e) => void addGuest(e)}
           onClose={() => setInviteModalOpen(false)}
+        />
+      )}
+
+      {markPaidConfirm && (
+        <MarkPaidConfirmModal
+          name={markPaidConfirm.name}
+          amountLabel={markPaidConfirm.amountLabel}
+          paid={markPaidConfirm.paid}
+          busy={markingPaidId === markPaidConfirm.memberId}
+          onConfirm={() =>
+            void markMemberPaid(markPaidConfirm.memberId, markPaidConfirm.paid)
+          }
+          onClose={() => {
+            if (markingPaidId) return;
+            setMarkPaidConfirm(null);
+          }}
         />
       )}
 
@@ -1490,6 +1567,144 @@ function InviteMembersModal({
                 </form>
               </>
             )}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function MarkPaidConfirmModal({
+  name,
+  amountLabel,
+  paid,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  name: string;
+  amountLabel: string;
+  paid: boolean;
+  busy: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, busy]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="mark-paid-confirm-title"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+        aria-label="Close dialog"
+        disabled={busy}
+        onClick={onClose}
+      />
+      <div
+        className="relative z-[1] w-full max-w-sm overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
+        style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <h2
+              id="mark-paid-confirm-title"
+              className="text-base font-semibold"
+            >
+              {paid ? "Confirm payment" : "Mark as unpaid"}
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {paid
+                ? "This marks their balance as paid for this group."
+                : "This clears their paid status for this group."}
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-10 w-10 shrink-0"
+            aria-label="Close"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="space-y-4 px-4 py-4">
+          <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center">
+            <p className="text-sm font-medium">{name}</p>
+            {paid ? (
+              <>
+                <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Amount confirmed
+                </p>
+                <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                  {amountLabel}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Was marked paid for {amountLabel}
+              </p>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="flex-1"
+              variant={paid ? "default" : "secondary"}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : paid ? (
+                "Confirm paid"
+              ) : (
+                "Confirm unpaid"
+              )}
+            </Button>
           </div>
         </div>
       </div>

@@ -139,9 +139,29 @@ export function OAuthCallbackClient() {
           return;
         }
 
-        // Not registered — sign out locally, then ask server to delete the stub user
+        // Not registered — notify Ygay, sign out, cleanup stub user
         const errorCode =
           mode === "signup" ? "invite_required" : "google_not_registered";
+
+        const attemptedEmail = user.email || "";
+        if (attemptedEmail) {
+          try {
+            void fetch("/api/auth/access-request", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: attemptedEmail,
+                source: mode === "signup" ? "signup" : "google",
+                name:
+                  (user.user_metadata?.full_name as string | undefined) ||
+                  (user.user_metadata?.name as string | undefined) ||
+                  null,
+              }),
+            });
+          } catch {
+            /* ignore */
+          }
+        }
 
         try {
           await supabase.auth.signOut();
@@ -149,18 +169,22 @@ export function OAuthCallbackClient() {
           /* ignore */
         }
 
-        // Best-effort cleanup (service role). Ignore failures.
-        void fetch("/api/auth/oauth-finish", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode,
-            invite: invite || undefined,
-            next,
-            cleanupOnly: true,
-            userId: user.id,
-          }),
-        }).catch(() => null);
+        // Best-effort cleanup — do not block the error redirect on mobile
+        try {
+          void fetch("/api/auth/oauth-finish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode,
+              invite: invite || undefined,
+              next,
+              cleanupOnly: true,
+              userId: user.id,
+            }),
+          });
+        } catch {
+          /* ignore */
+        }
 
         failToAuth(errorCode);
       } catch (e) {

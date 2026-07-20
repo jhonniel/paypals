@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createServerClient } from "@supabase/ssr";
 import { fromZod, tooManyRequests } from "@/lib/api";
+import { NOT_SIGNED_UP_MESSAGE } from "@/lib/auth-messages";
+import { notifyAccessRequest } from "@/lib/email/notify";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 const schema = z.object({
@@ -62,17 +64,69 @@ export async function POST(request: NextRequest) {
   if (error) {
     const raw = (error.message || "").toLowerCase();
     let message = "Invalid email or password";
+    let code = "UNAUTHORIZED";
+
     if (raw.includes("email not confirmed") || raw.includes("not confirmed")) {
-      message = "Email not confirmed yet. Check your inbox or use a confirmed demo account.";
+      message =
+        "Email not confirmed yet. Check your inbox or use a confirmed demo account.";
     } else if (raw.includes("rate") || error.status === 429) {
       message = "Too many attempts. Wait a minute and try again.";
+    } else if (
+      raw.includes("invalid login") ||
+      raw.includes("invalid credentials") ||
+      raw.includes("user not found") ||
+      raw.includes("no user")
+    ) {
+      // Supabase uses the same error for unknown accounts and wrong passwords.
+      message =
+        "Couldn't sign you in. If you’re new here, your account is not signed up yet — Paypals is invite-only, ask Ygay!";
+      code = "NOT_SIGNED_UP";
+      void notifyAccessRequest({
+        email: parsed.data.email,
+        source: "email",
+      }).catch(() => null);
     }
 
     console.error("[login]", error.message, error.status);
     return NextResponse.json(
-      { error: { code: "UNAUTHORIZED", message } },
+      { error: { code, message } },
       { status: 401 }
     );
+  }
+
+  // Block invite-unverified accounts (same gate as Google login)
+  if (data.user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("invite_verified, is_admin")
+      .eq("id", data.user.id)
+      .maybeSingle();
+
+    const verified =
+      Boolean(profile?.invite_verified) || Boolean(profile?.is_admin);
+
+    if (!verified) {
+      void notifyAccessRequest({
+        email: parsed.data.email,
+        source: "email",
+        name: (data.user.user_metadata?.full_name as string | undefined) ?? null,
+      }).catch(() => null);
+
+      await supabase.auth.signOut();
+      const clear = NextResponse.json(
+        {
+          error: {
+            code: "NOT_SIGNED_UP",
+            message: NOT_SIGNED_UP_MESSAGE,
+          },
+        },
+        { status: 401 }
+      );
+      for (const { name } of cookieJar) {
+        clear.cookies.set(name, "", { path: "/", maxAge: 0 });
+      }
+      return clear;
+    }
   }
 
   const response = NextResponse.json({

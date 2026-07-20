@@ -72,8 +72,10 @@ export function SignupForm() {
       (fromCookie ? decodeURIComponent(fromCookie) : null);
     if (!code) return;
     const messages: Record<string, string> = {
-      invite_required: "Enter a valid invite code to create your account.",
-      google_not_registered: "Your email is not yet registered.",
+      invite_required:
+        "Enter a valid invite code to create your account. Ask Ygay if you need one.",
+      google_not_registered:
+        "Your account is not signed up yet. Paypals is invite-only — ask Ygay!",
       auth_callback: "Sign-in failed. Please try again.",
     };
     const msg = messages[code] ?? decodeURIComponent(code);

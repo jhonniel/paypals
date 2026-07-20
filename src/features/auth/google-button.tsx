@@ -80,16 +80,11 @@ export function GoogleButton({
 
       setOAuthCookies(invite, safeNext, mode);
 
-      const callbackParams = new URLSearchParams();
-      callbackParams.set("next", safeNext);
-      callbackParams.set("mode", mode);
-      if (invite) callbackParams.set("invite", invite);
-
-      // Manual redirect is more reliable on mobile (in-app browsers / Safari)
+      // Clean callback path — mode/next/invite live in cookies (mobile-safe)
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${origin}/auth/callback?${callbackParams.toString()}`,
+          redirectTo: `${origin}/auth/callback`,
           skipBrowserRedirect: true,
           queryParams: {
             access_type: "online",

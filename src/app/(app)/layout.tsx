@@ -27,26 +27,36 @@ export default async function AuthenticatedLayout({
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      console.warn("[app-layout] getUser:", error.message);
+    } else {
+      user = data.user;
+    }
+  } catch (e) {
+    console.warn("[app-layout] getUser threw", e);
+  }
 
   if (!user) {
     redirect("/login");
   }
 
+  const authed = user;
+
   const { data: profile } = await supabase
     .from("profiles")
     .select("*")
-    .eq("id", user.id)
+    .eq("id", authed.id)
     .maybeSingle();
 
   const fallback: Profile = {
-    id: user.id,
-    email: user.email ?? null,
-    full_name: (user.user_metadata?.full_name as string) ?? null,
+    id: authed.id,
+    email: authed.email ?? null,
+    full_name: (authed.user_metadata?.full_name as string) ?? null,
     username: null,
-    avatar_url: (user.user_metadata?.avatar_url as string) ?? null,
+    avatar_url: (authed.user_metadata?.avatar_url as string) ?? null,
     bio: null,
     is_admin: false,
     created_at: new Date().toISOString(),

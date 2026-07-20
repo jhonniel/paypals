@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { getAdminClient, writeAuditLog } from "@/lib/supabase/auth";
 import { ok, forbidden, fail, fromZod, serverError, created } from "@/lib/api";
+import { sendSignupInviteEmail } from "@/lib/email/notify";
+import { isSmtpConfigured } from "@/lib/email/smtp";
 
 export async function GET() {
   try {
@@ -38,6 +40,8 @@ const createSchema = z.object({
   expires_at: z.string().datetime().optional().nullable(),
   /** How many unique single-use codes to create (1–50). */
   count: z.number().int().min(1).max(50).optional().default(1),
+  /** Optional — email invite codes to this address via SMTP */
+  send_to: z.string().email().optional().nullable(),
 });
 
 export async function POST(request: Request) {
@@ -107,14 +111,35 @@ export async function POST(request: Request) {
       max_uses: 1,
     });
 
+    let emailed: { sent: boolean; error?: string } | null = null;
+    const sendTo = parsed.data.send_to?.trim();
+    if (sendTo) {
+      if (!isSmtpConfigured()) {
+        emailed = { sent: false, error: "SMTP is not configured" };
+      } else {
+        const { data: adminProfile } = await supabase
+          .from("profiles")
+          .select("full_name, email")
+          .eq("id", user.id)
+          .maybeSingle();
+        emailed = await sendSignupInviteEmail({
+          to: sendTo,
+          codes: createdRows.map((r) => r.code),
+          label: parsed.data.label,
+          fromName: adminProfile?.full_name || adminProfile?.email || "Paypals admin",
+        });
+      }
+    }
+
     if (createdRows.length === 1) {
-      return created(createdRows[0]);
+      return created({ ...createdRows[0], emailed });
     }
 
     return created({
       count: createdRows.length,
       invites: createdRows,
       codes: createdRows.map((r) => r.code),
+      emailed,
     });
   } catch (e) {
     console.error(e);
