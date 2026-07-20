@@ -149,14 +149,37 @@ export function OAuthCallbackClient() {
           return;
         }
 
-        // Signup path: redeem invite in the browser session
-        if (mode === "signup" && invite) {
+        const metaInvite =
+          typeof user.user_metadata?.invite_code === "string"
+            ? user.user_metadata.invite_code.trim()
+            : "";
+        const inviteToRedeem = invite || metaInvite;
+
+        // Always redeem when we have a code — covers email-confirm links
+        // (mode may be "login") and Google signup with invite.
+        if (inviteToRedeem) {
           const { data: redeemed } = await supabase.rpc("redeem_signup_invite", {
-            p_code: invite,
+            p_code: inviteToRedeem,
           });
           const r = redeemed as { ok?: boolean; group_id?: string } | null;
           if (r?.ok) {
             clearOAuthHelperCookies();
+            try {
+              const { sendAccessConfirmedEmail } = await import(
+                "@/lib/email/notify"
+              );
+              if (user.email) {
+                void sendAccessConfirmedEmail({
+                  to: user.email,
+                  name:
+                    (user.user_metadata?.full_name as string | undefined) ||
+                    (user.user_metadata?.name as string | undefined) ||
+                    null,
+                });
+              }
+            } catch {
+              /* ignore */
+            }
             go(r.group_id ? `/groups/${r.group_id}` : next);
             return;
           }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, fail, fromZod, serverError } from "@/lib/api";
+import { sendAccessConfirmedEmail } from "@/lib/email/notify";
 
 const schema = z.object({
   inviteCode: z.string().min(4).max(64),
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
-    const { supabase } = auth;
+    const { supabase, user } = auth;
 
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return fromZod(parsed.error);
@@ -30,6 +31,16 @@ export async function POST(request: Request) {
         400,
         "INVALID_INVITE"
       );
+    }
+
+    if (user.email) {
+      void sendAccessConfirmedEmail({
+        to: user.email,
+        name:
+          (user.user_metadata?.full_name as string | undefined) ||
+          (user.user_metadata?.name as string | undefined) ||
+          null,
+      }).catch(() => null);
     }
 
     return ok({

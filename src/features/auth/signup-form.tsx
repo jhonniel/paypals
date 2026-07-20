@@ -135,12 +135,18 @@ export function SignupForm() {
       }
 
       if (json?.data?.needsConfirmation) {
-        toast.success("Check your email to confirm your account");
+        toast.success(
+          "Almost there — check your email to confirm, then you can sign in."
+        );
         router.push(`/login?next=${encodeURIComponent(json.data.redirectTo ?? next)}`);
         return;
       }
 
-      toast.success("Account created");
+      if (json?.data?.redeemed) {
+        toast.success("Invite confirmed — welcome to Paypals");
+      } else {
+        toast.success("Account created");
+      }
       router.push(json?.data?.redirectTo ?? next);
       router.refresh();
     } catch (err) {

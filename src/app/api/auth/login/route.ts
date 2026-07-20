@@ -102,8 +102,41 @@ export async function POST(request: NextRequest) {
       .eq("id", data.user.id)
       .maybeSingle();
 
-    const verified =
+    let verified =
       Boolean(profile?.invite_verified) || Boolean(profile?.is_admin);
+
+    // Email/password signup stores invite_code in metadata; redeem if still pending
+    // (e.g. user confirmed email before invite was applied).
+    if (!verified) {
+      const metaInvite =
+        typeof data.user.user_metadata?.invite_code === "string"
+          ? data.user.user_metadata.invite_code.trim()
+          : "";
+      if (metaInvite) {
+        const { data: redeemed } = await supabase.rpc("redeem_signup_invite", {
+          p_code: metaInvite,
+        });
+        const r = redeemed as { ok?: boolean } | null;
+        if (r?.ok) {
+          verified = true;
+          try {
+            const { sendAccessConfirmedEmail } = await import(
+              "@/lib/email/notify"
+            );
+            if (data.user.email) {
+              void sendAccessConfirmedEmail({
+                to: data.user.email,
+                name:
+                  (data.user.user_metadata?.full_name as string | undefined) ??
+                  null,
+              });
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
 
     if (!verified) {
       void notifyAccessRequest({

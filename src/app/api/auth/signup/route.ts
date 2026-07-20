@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { fromZod, fail, ok, tooManyRequests } from "@/lib/api";
 import { publicEnv } from "@/lib/env";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { sendAccessConfirmedEmail } from "@/lib/email/notify";
 
 const schema = z.object({
   email: z.string().email(),
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body);
   if (!parsed.success) return fromZod(parsed.error);
 
+  const inviteCode = parsed.data.inviteCode.trim();
   const cookieStore = await cookies();
   const supabase = createServerClient(url, key, {
     cookies: {
@@ -54,11 +56,16 @@ export async function POST(request: Request) {
 
   const { data: validation, error: validateError } = await supabase.rpc(
     "validate_signup_invite",
-    { p_code: parsed.data.inviteCode }
+    { p_code: inviteCode }
   );
 
   if (validateError) return fail(validateError.message, 400);
-  const invite = validation as { valid?: boolean; kind?: string; group_id?: string; label?: string };
+  const invite = validation as {
+    valid?: boolean;
+    kind?: string;
+    group_id?: string;
+    label?: string;
+  };
   if (!invite?.valid || invite.kind !== "app") {
     return fail(
       "A valid admin invite code is required to create an account",
@@ -68,6 +75,7 @@ export async function POST(request: Request) {
   }
 
   const nextPath = "/dashboard";
+  const emailRedirectTo = `${publicEnv.appUrl}/auth/callback?mode=signup&next=${encodeURIComponent(nextPath)}&invite=${encodeURIComponent(inviteCode)}`;
 
   const { data, error } = await supabase.auth.signUp({
     email: parsed.data.email,
@@ -75,26 +83,65 @@ export async function POST(request: Request) {
     options: {
       data: {
         full_name: parsed.data.fullName,
-        invite_code: parsed.data.inviteCode.trim(),
+        invite_code: inviteCode,
       },
-      emailRedirectTo: `${publicEnv.appUrl}/auth/callback?next=${encodeURIComponent(nextPath)}&invite=${encodeURIComponent(parsed.data.inviteCode.trim())}`,
+      emailRedirectTo,
     },
   });
 
   if (error) return fail(error.message, 400, "SIGNUP_FAILED");
+
+  // Invite-only apps: confirm email immediately when service role is available,
+  // then redeem the invite so login works without waiting on a confirm link.
+  if (
+    data.user &&
+    !data.session &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  ) {
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      await admin.auth.admin.updateUserById(data.user.id, {
+        email_confirm: true,
+        user_metadata: {
+          full_name: parsed.data.fullName,
+          invite_code: inviteCode,
+        },
+      });
+
+      const { data: signedIn, error: signInError } =
+        await supabase.auth.signInWithPassword({
+          email: parsed.data.email,
+          password: parsed.data.password,
+        });
+
+      if (!signInError && signedIn.session) {
+        data.session = signedIn.session;
+      }
+    } catch (e) {
+      console.error("[signup] auto-confirm failed", e);
+    }
+  }
 
   let redeemed = false;
 
   if (data.session) {
     const { data: redeemResult, error: redeemError } = await supabase.rpc(
       "redeem_signup_invite",
-      { p_code: parsed.data.inviteCode }
+      { p_code: inviteCode }
     );
     if (redeemError) {
       console.error(redeemError);
     } else {
       const r = redeemResult as { ok?: boolean };
       redeemed = Boolean(r?.ok);
+    }
+
+    if (redeemed && data.user?.email) {
+      void sendAccessConfirmedEmail({
+        to: data.user.email,
+        name: parsed.data.fullName,
+      }).catch(() => null);
     }
   }
 
