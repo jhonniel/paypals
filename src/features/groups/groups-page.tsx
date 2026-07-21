@@ -53,9 +53,19 @@ function money(value: number, currency = "PHP") {
 
 async function fetchGroups(): Promise<GroupRow[]> {
   const res = await fetch("/api/groups");
-  const json = await res.json();
+  const text = await res.text();
+  let json: { data?: GroupRow[]; error?: { message?: string } } | null = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(
+      /^internal server error$/i.test(text.trim())
+        ? "Server error — restart the dev server (clear .next cache)."
+        : `Invalid server response: ${text.slice(0, 80)}`
+    );
+  }
   if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load groups");
-  return json.data ?? [];
+  return json?.data ?? [];
 }
 
 /** Stable pseudo-random 0..1 derived from a string, so each tile floats differently. */

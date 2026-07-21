@@ -6,7 +6,7 @@ type InsertItem = {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
-  subItems?: Array<{ name: string; amount?: number | null }> | null;
+  subItems?: unknown;
 };
 
 /** Insert OCR/manual line items, including sub_items when the column exists. */

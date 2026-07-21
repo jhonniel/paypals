@@ -130,7 +130,11 @@ export function SignupForm() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        const message = json?.error?.message ?? "Signup failed";
+        const message =
+          json?.error?.message ??
+          (res.status >= 500
+            ? "Server error — try again, or restart the app if this keeps happening."
+            : "Signup failed");
         setFormError(message);
         toast.error(message);
         return;

@@ -1,6 +1,7 @@
 /**
  * Shared receipt text → structured fields parser.
- * Handles common PH POS layouts (name / qty×price / modifiers).
+ * Handles common PH POS layouts (name / qty×price / modifiers)
+ * and delivery/combo receipts with nested sub-items (Chowking-style).
  */
 
 import type { OcrLineItem, OcrResult, OcrProviderName } from "@/services/ocr/types";
@@ -10,12 +11,12 @@ const TOTAL_RE = /(?:grand\s*)?total|amount\s*due|balance\s*due|amount\s*payable
 const SUBTOTAL_RE = /sub\s*total|subtotal|merchandise/i;
 const TAX_AMOUNT_RE = /vat\s*amount|sales\s*tax|\btax\b(?!\s*exempt)/i;
 const TIP_RE = /(?:tip|gratuity)/i;
-const DISCOUNT_RE = /(?:discount|promo)/i;
-const SERVICE_RE = /(?:service\s*charge|\bsvc\b)/i;
+const DISCOUNT_RE = /(?:discount|promo|sc\/pwd|pwd|senior)/i;
+const SERVICE_RE = /(?:service\s*charge|\bsvc\b|delivery\s*charge)/i;
 
 /** Lines that are never menu items or should be ignored as noise. */
 const SKIP_RE =
-  /^(?:owned\s*by|vat\s*reg|tin:?|min:|serial|sales\s*invoice|invoice|description|amount|table:|pax:|si#|trans#|cashier|terminal|thank|change|cash|card|gcash|paymaya|maya|vatable|vat\s*exempt|zero\s*rated|other\s*tax|customer\s*info|name$|address$|ref|bir|tel|phone|www\.|http|l-\d|bldg|avenue|barangay|district|city|davao|poblacion|laurel|pryce|ascendido|ground\s*floor)/i;
+  /^(?:owned\s*by|vat\s*reg|tin:?|min:|serial|sales\s*invoice|invoice|description|amount|table:|pax:|si#|trans#|cashier|terminal|thank|change|cash|card|gcash|paymaya|maya|vatable|vat\s*exempt|zero\s*rated|other\s*tax|customer\s*info|name$|address$|ref|bir|tel|phone|www\.|http|l-\d|bldg|avenue|barangay|district|poblacion|ground\s*floor|delivery\s*address|contact\s*number|your\s*chowking|order\s*history)/i;
 
 const DATE_RE =
   /(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})|(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/;
@@ -25,7 +26,9 @@ const TIME_RE = /(\d{1,2}:\d{2}(?::\d{2})?)/;
 const QTY_PRICE_RE =
   /^(\d+)?\s*[x×]\s*([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?\s*$/i;
 
-const MODIFIER_RE = /^[\-–—•*]/;
+const MODIFIER_RE = /^[\-–—•*·]/;
+const SIZE_OR_OPTION_RE =
+  /^(?:regular|large|medium|small|tall|grande|venti|short|solo|family|upsized?|extra|less|no)\b/i;
 
 function parseMoney(raw: string): number | null {
   const m = raw.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/);
@@ -65,7 +68,7 @@ function looksLikeItemName(line: string): boolean {
   if (QTY_PRICE_RE.test(line)) return false;
   if (DATE_RE.test(line) && line.length < 30) return false;
   if (!/[a-zA-Z]{3,}/.test(line)) return false;
-  if (line.length > 48) return false;
+  if (line.length > 100) return false;
   return true;
 }
 
@@ -85,6 +88,99 @@ function extractQtyPrice(line: string): {
   return { quantity, unitPrice, totalPrice };
 }
 
+type OcrSub = NonNullable<OcrLineItem["subItems"]>[number];
+
+function pushSubItem(subs: OcrSub[], name: string, amount: number | null) {
+  const cleaned = name.replace(/^[\-–—•*·]+\s*/, "").trim().slice(0, 120);
+  if (!cleaned) return;
+
+  // Nest size/option under the previous component (Pepsi Black → Regular)
+  if (SIZE_OR_OPTION_RE.test(cleaned) && subs.length > 0) {
+    const parent = subs[subs.length - 1];
+    const nested = parent.subItems ?? [];
+    nested.push({ name: cleaned, amount });
+    parent.subItems = nested;
+    return;
+  }
+
+  subs.push({ name: cleaned, amount });
+}
+
+function collectFollowingSubItems(
+  lines: string[],
+  startIndex: number
+): { subItems: OcrSub[]; consumedThrough: number } {
+  const subItems: OcrSub[] = [];
+  let consumedThrough = startIndex;
+
+  for (let k = startIndex + 1; k < lines.length; k++) {
+    const next = lines[k].trim();
+    if (!next) {
+      consumedThrough = k;
+      continue;
+    }
+    if (extractQtyPrice(next)) break;
+    if (isSummaryLabel(next) || isSkipLine(next)) break;
+
+    // Next priced parent line (inline "Name 99.00")
+    const moneyMatch = [...next.matchAll(/([\d,]+\.\d{2})/g)];
+    if (moneyMatch.length > 0) {
+      const last = moneyMatch[moneyMatch.length - 1];
+      const price = parseMoney(last[1]);
+      const namePart = next
+        .slice(0, last.index ?? 0)
+        .trim()
+        .replace(/^[\-–—•*·]+\s*/, "");
+      if (
+        price != null &&
+        price > 0 &&
+        namePart.length >= 3 &&
+        looksLikeItemName(namePart)
+      ) {
+        break;
+      }
+    }
+
+    if (MODIFIER_RE.test(next) || /^[•·]/.test(next)) {
+      const cleaned = next.replace(/^[\-–—•*·]+\s*/, "").trim();
+      if (!cleaned) {
+        consumedThrough = k;
+        continue;
+      }
+      const parts = cleaned
+        .split(/[,/|]+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      for (const part of parts.length ? parts : [cleaned]) {
+        const moneyAtEnd = part.match(/^(.*?)([\d,]+\.\d{2})\s*$/);
+        if (moneyAtEnd && moneyAtEnd[1].trim()) {
+          pushSubItem(subItems, moneyAtEnd[1].trim(), parseMoney(moneyAtEnd[2]));
+        } else {
+          pushSubItem(subItems, part, null);
+        }
+      }
+      consumedThrough = k;
+      continue;
+    }
+
+    // Unpriced component lines under a meal/combo (Chowking-style)
+    if (
+      moneyMatch.length === 0 &&
+      (looksLikeItemName(next) ||
+        SIZE_OR_OPTION_RE.test(next) ||
+        (next.length <= 100 && /[a-zA-Z]{2,}/.test(next)))
+    ) {
+      pushSubItem(subItems, next, null);
+      consumedThrough = k;
+      continue;
+    }
+
+    break;
+  }
+
+  return { subItems, consumedThrough };
+}
+
 /**
  * PH POS pattern:
  *   MATCHA COFFEE LATTE
@@ -93,14 +189,17 @@ function extractQtyPrice(line: string): {
  */
 function extractPosItems(lines: string[]): OcrLineItem[] {
   const items: OcrLineItem[] = [];
+  const used = new Set<number>();
 
   for (let i = 0; i < lines.length; i++) {
+    if (used.has(i)) continue;
     const line = lines[i];
     const qty = extractQtyPrice(line);
     if (!qty) continue;
 
     let name: string | null = null;
     for (let j = i - 1; j >= 0; j--) {
+      if (used.has(j)) break;
       const prev = lines[j];
       if (MODIFIER_RE.test(prev)) continue;
       if (extractQtyPrice(prev)) break;
@@ -118,51 +217,11 @@ function extractPosItems(lines: string[]): OcrLineItem[] {
 
     if (!name) continue;
 
-    const subItems: NonNullable<OcrLineItem["subItems"]> = [];
-    for (let k = i + 1; k < lines.length; k++) {
-      const next = lines[k];
-      if (extractQtyPrice(next)) break;
-      if (isSummaryLabel(next) || isSkipLine(next)) break;
-      if (looksLikeItemName(next) && !MODIFIER_RE.test(next)) break;
-
-      if (MODIFIER_RE.test(next)) {
-        const cleaned = next.replace(MODIFIER_RE, "").trim();
-        if (!cleaned) continue;
-        // Split comma-separated modifiers into individual sub-items
-        const parts = cleaned
-          .split(/[,/|]+/)
-          .map((p) => p.trim())
-          .filter((p) => p.length >= 1);
-        for (const part of parts.length ? parts : [cleaned]) {
-          const moneyAtEnd = part.match(/^(.*?)([\d,]+\.\d{2})\s*$/);
-          if (moneyAtEnd && moneyAtEnd[1].trim()) {
-            subItems.push({
-              name: moneyAtEnd[1].trim().slice(0, 80),
-              amount: parseMoney(moneyAtEnd[2]),
-            });
-          } else {
-            subItems.push({ name: part.slice(0, 80), amount: null });
-          }
-        }
-        continue;
-      }
-
-      // Soft modifier without leading dash (common OCR miss)
-      if (
-        next.length <= 40 &&
-        /^(?:tall|grande|venti|short|hot|iced?|dine\s*in|take\s*out|for\s*here|to\s*go|extra|no\s+)/i.test(
-          next
-        )
-      ) {
-        subItems.push({ name: next.slice(0, 80), amount: null });
-        continue;
-      }
-
-      break;
-    }
+    const { subItems, consumedThrough } = collectFollowingSubItems(lines, i);
+    for (let u = i; u <= consumedThrough; u++) used.add(u);
 
     items.push({
-      name: name.replace(/^[\d.]+\s+/, "").slice(0, 80),
+      name: name.replace(/^[\d.]+\s+/, "").slice(0, 120),
       quantity: qty.quantity,
       unitPrice: qty.unitPrice,
       totalPrice: qty.totalPrice,
@@ -173,10 +232,14 @@ function extractPosItems(lines: string[]): OcrLineItem[] {
   return items;
 }
 
-/** Fallback: single-line "Item name 99.00" */
+/** Fallback: single-line "Item name 99.00" + following component lines */
 function extractInlineItems(lines: string[]): OcrLineItem[] {
   const items: OcrLineItem[] = [];
-  for (const line of lines) {
+  const used = new Set<number>();
+
+  for (let i = 0; i < lines.length; i++) {
+    if (used.has(i)) continue;
+    const line = lines[i];
     if (isSkipLine(line) || isSummaryLabel(line) || MODIFIER_RE.test(line)) continue;
     if (extractQtyPrice(line)) continue;
     if (DATE_RE.test(line)) continue;
@@ -197,11 +260,15 @@ function extractInlineItems(lines: string[]): OcrLineItem[] {
     if (!name || name.length < 3 || !/[a-zA-Z]{3,}/.test(name)) continue;
     if (isSkipLine(name) || isSummaryLabel(name)) continue;
 
+    const { subItems, consumedThrough } = collectFollowingSubItems(lines, i);
+    for (let u = i; u <= consumedThrough; u++) used.add(u);
+
     items.push({
-      name: name.slice(0, 80),
+      name: name.slice(0, 120),
       quantity,
       unitPrice: quantity > 1 ? moneyNumber(d(price).div(quantity)) : price,
       totalPrice: price,
+      ...(subItems.length ? { subItems } : {}),
     });
   }
   return items;
@@ -210,7 +277,7 @@ function extractInlineItems(lines: string[]): OcrLineItem[] {
 function pickMerchant(lines: string[]): string | null {
   for (const line of lines.slice(0, 8)) {
     if (isSkipLine(line)) continue;
-    if (/cafe|coffee|restaurant|kitchen|bistro|pizza|grill|mr\.?\s*wen/i.test(line)) {
+    if (/cafe|coffee|restaurant|kitchen|bistro|pizza|grill|chowking|jollibee|mr\.?\s*wen/i.test(line)) {
       const cafeOnly = line.match(/^(.+?\bcafe\b)/i);
       return (cafeOnly?.[1] ?? line).slice(0, 80).trim();
     }
@@ -306,10 +373,11 @@ export function parseReceiptText(
   tax = null;
 
   let items = dedupeItems(extractPosItems(lines));
-  if (items.length < 2) {
-    const inline = dedupeItems(extractInlineItems(lines));
-    if (inline.length > items.length) items = inline;
-  }
+  const inline = dedupeItems(extractInlineItems(lines));
+  // Prefer whichever found more structure (items or nested subs)
+  const score = (list: OcrLineItem[]) =>
+    list.reduce((s, i) => s + 1 + (i.subItems?.length ?? 0), 0);
+  if (score(inline) > score(items)) items = inline;
 
   if (total !== null) {
     items = items.filter(

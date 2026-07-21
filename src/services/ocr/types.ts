@@ -11,8 +11,12 @@ export type OcrLineItem = {
   unitPrice: number;
   totalPrice: number;
   confidence?: number;
-  /** Modifiers / add-ons under this line (e.g. -TALL, ICE) */
-  subItems?: Array<{ name: string; amount?: number | null }>;
+  /** Meal components / modifiers under this line (may nest, e.g. drink → size) */
+  subItems?: Array<{
+    name: string;
+    amount?: number | null;
+    subItems?: OcrLineItem["subItems"];
+  }>;
 };
 
 export type OcrResult = {
