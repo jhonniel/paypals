@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, created, unauthorized, fail, fromZod, serverError } from "@/lib/api";
+import {
+  getGroupMemberPayments,
+  isMemberMarkedPaid,
+} from "@/lib/group-member-payments";
 
 export async function GET() {
   try {
@@ -10,21 +14,68 @@ export async function GET() {
 
     const { data: memberships, error } = await supabase
       .from("group_members")
-      .select("role, group_id, groups(id, name, description, photo_url, invite_code, created_by, created_at)")
+      .select(
+        "id, role, group_id, groups(id, name, description, photo_url, invite_code, created_by, created_at)"
+      )
       .eq("user_id", user.id);
 
     if (error) return fail(error.message, 400);
 
-    const groups = (memberships ?? [])
-      .map((m) => {
-        const g = m.groups as unknown as Record<string, unknown> | Record<string, unknown>[] | null;
+    const groups = await Promise.all(
+      (memberships ?? []).map(async (m) => {
+        const g = m.groups as unknown as
+          | Record<string, unknown>
+          | Record<string, unknown>[]
+          | null;
         const group = Array.isArray(g) ? g[0] : g;
         if (!group) return null;
-        return { ...group, my_role: m.role };
-      })
-      .filter(Boolean);
 
-    return ok(groups);
+        const { data: groupMembers } = await supabase
+          .from("group_members")
+          .select("id")
+          .eq("group_id", m.group_id);
+        const memberIds = (groupMembers ?? []).map((member) => member.id);
+        const payments = await getGroupMemberPayments(
+          supabase,
+          m.group_id as string,
+          memberIds
+        );
+        const pay = payments.find((payment) => payment.member_id === m.id);
+        const payTotal = pay?.total ?? 0;
+        const currency = pay?.currency ?? "PHP";
+
+        let unpaid = payTotal;
+        let paid = false;
+        if (payTotal > 0) {
+          const { data: proof } = await supabase
+            .from("group_payment_proofs")
+            .select("status, expected_amount, ocr_raw")
+            .eq("group_id", m.group_id)
+            .eq("from_member_id", m.id)
+            .maybeSingle();
+          const raw = proof?.ocr_raw as { source?: string } | null;
+          paid = isMemberMarkedPaid(payTotal, proof
+            ? {
+                status: proof.status,
+                expected_amount: Number(proof.expected_amount),
+                manual: raw?.source === "manual",
+              }
+            : null);
+          if (paid) unpaid = 0;
+        }
+
+        return {
+          ...group,
+          my_role: m.role,
+          my_owes: unpaid,
+          my_currency: currency,
+          my_paid: paid && payTotal > 0,
+          my_receipts: pay?.receipts ?? [],
+        };
+      })
+    );
+
+    return ok(groups.filter(Boolean));
   } catch (e) {
     console.error(e);
     return serverError();

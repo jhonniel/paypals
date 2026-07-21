@@ -398,11 +398,12 @@ export async function GET(_req: Request, { params }: Params) {
         (group as { members_visible_to_group?: boolean }).members_visible_to_group
       ) || canManageMembers;
 
-    // Privacy: non-managers only see their own member tile + payment unless owner shares
+    // Privacy: the owner may share the member list, but payment balances remain
+    // private. Non-managers only receive their own total.
     const visibleMembers = membersVisible
       ? members ?? []
       : (members ?? []).filter((m) => m.id === my?.id);
-    const visiblePayments = membersVisible
+    const visiblePayments = canManageMembers
       ? member_payments
       : member_payments.filter((p) => p.member_id === my?.id);
 

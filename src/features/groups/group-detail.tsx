@@ -18,6 +18,7 @@ import {
   ZoomIn,
   Upload,
   CheckCircle2,
+  RotateCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -469,6 +470,16 @@ export function GroupDetailView({
     amountLabel: string;
     paid: boolean;
   } | null>(null);
+  const [flippedMembers, setFlippedMembers] = useState<Set<string>>(new Set());
+
+  function toggleMemberFlip(memberId: string) {
+    setFlippedMembers((prev) => {
+      const next = new Set(prev);
+      if (next.has(memberId)) next.delete(memberId);
+      else next.add(memberId);
+      return next;
+    });
+  }
 
   const canManage =
     data?.my_role === "owner" ||
@@ -871,11 +882,20 @@ export function GroupDetailView({
                 payTotal > 0 &&
                 (Boolean(proof.manual) ||
                   Math.abs((proof.expected_amount ?? 0) - payTotal) <= 1);
+              const canFlip = (canManage || isMe) && items.length > 0;
+              const isFlipped = canFlip && flippedMembers.has(m.id);
               return (
+                <div key={m.id} className="[perspective:1400px]">
                 <div
-                  key={m.id}
                   className={cn(
-                    "flex flex-col rounded-2xl border p-3",
+                    "grid transition-transform duration-500 [transform-style:preserve-3d]",
+                    isFlipped && "[transform:rotateY(180deg)]"
+                  )}
+                >
+                <div
+                  className={cn(
+                    "col-start-1 row-start-1 flex flex-col rounded-2xl border p-3 [backface-visibility:hidden]",
+                    isFlipped && "pointer-events-none",
                     isMe
                       ? "border-primary/40 bg-primary/10"
                       : "border-border/80 bg-muted/30"
@@ -910,50 +930,52 @@ export function GroupDetailView({
                           : ""}
                       </p>
                     </div>
-                  </div>
-
-                  <div className="mt-3 rounded-xl bg-background/60 px-3 py-2 text-center">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Pays
-                    </p>
-                    <p className="text-xl font-semibold tabular-nums tracking-tight">
-                      {money(payTotal, payCurrency)}
-                    </p>
-                    {isPaid ? (
-                      <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Paid
-                        {proof?.manual ? (
-                          <span className="font-normal opacity-80">· manual</span>
-                        ) : null}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-2 min-h-0 flex-1">
-                    {items.length > 0 ? (
-                      <ul className="space-y-1">
-                        {items.map((item, idx) => (
-                          <li
-                            key={`${m.id}-${item.name}-${idx}`}
-                            className="flex items-baseline justify-between gap-2 text-[11px]"
-                          >
-                            <span className="min-w-0 truncate text-muted-foreground">
-                              {titleCaseItem(item.name)}
-                              {item.quantity > 1 ? ` ×${item.quantity}` : ""}
-                            </span>
-                            <span className="shrink-0 tabular-nums text-muted-foreground">
-                              {money(item.amount, payCurrency)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-[11px] italic text-muted-foreground/70">
-                        {isGuest ? "Waiting to join" : "No items yet"}
-                      </p>
+                    {canFlip && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 shrink-0 text-muted-foreground"
+                        aria-label="Show items"
+                        onClick={() => toggleMemberFlip(m.id)}
+                      >
+                        <RotateCw className="h-4 w-4" />
+                      </Button>
                     )}
                   </div>
+
+                  {(canManage || isMe) && (
+                    <div className="mt-3 rounded-xl bg-background/60 px-3 py-2 text-center">
+                      {isPaid ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 className="h-4 w-4" />
+                          Paid
+                          {proof?.manual ? (
+                            <span className="font-normal opacity-80">· manual</span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <>
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {isMe && !canManage ? "You owe in this group" : "Pays"}
+                          </p>
+                          <p className="text-xl font-semibold tabular-nums tracking-tight">
+                            {money(payTotal, payCurrency)}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {canFlip && (
+                    <button
+                      type="button"
+                      className="mt-2 text-left text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => toggleMemberFlip(m.id)}
+                    >
+                      View {items.length} item{items.length === 1 ? "" : "s"} →
+                    </button>
+                  )}
 
                   {isMe && (data.where_to_pay?.length ?? 0) > 0 && payTotal > 0 && (
                     <div className="mt-2 space-y-2 rounded-xl border border-border/60 bg-background/40 px-3 py-2.5">
@@ -1218,6 +1240,85 @@ export function GroupDetailView({
                       </Button>
                     </div>
                   )}
+                </div>
+
+                {/* Back — item breakdown */}
+                <div
+                  className={cn(
+                    "col-start-1 row-start-1 flex flex-col rounded-2xl border p-3 [backface-visibility:hidden] [transform:rotateY(180deg)]",
+                    !isFlipped && "pointer-events-none",
+                    isMe
+                      ? "border-primary/40 bg-primary/10"
+                      : "border-border/80 bg-muted/30"
+                  )}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div
+                      className={cn(
+                        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+                        isMe
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-foreground"
+                      )}
+                      aria-hidden
+                    >
+                      {initial}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold leading-tight">
+                        {label}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {items.length} item{items.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 text-muted-foreground"
+                      aria-label="Back to summary"
+                      onClick={() => toggleMemberFlip(m.id)}
+                    >
+                      <RotateCw className="h-4 w-4 -scale-x-100" />
+                    </Button>
+                  </div>
+
+                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+                    {items.length > 0 ? (
+                      <ul className="space-y-1.5">
+                        {items.map((item, idx) => (
+                          <li
+                            key={`${m.id}-back-${item.name}-${idx}`}
+                            className="flex items-baseline justify-between gap-2 text-xs"
+                          >
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {titleCaseItem(item.name)}
+                              {item.quantity > 1 ? ` ×${item.quantity}` : ""}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {money(item.amount, payCurrency)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px] italic text-muted-foreground/70">
+                        No items yet
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex items-baseline justify-between border-t border-border/60 pt-2">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Total
+                    </span>
+                    <span className="text-base font-semibold tabular-nums tracking-tight">
+                      {money(payTotal, payCurrency)}
+                    </span>
+                  </div>
+                </div>
+                </div>
                 </div>
               );
             })}

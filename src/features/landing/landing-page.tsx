@@ -110,7 +110,7 @@ export function LandingPage() {
       {/* Hero */}
       <section className="landing-hero-atmosphere relative min-h-[100dvh] overflow-hidden">
         <div className="landing-grid pointer-events-none absolute inset-0 opacity-60" />
-        <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 lg:block">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[55dvh] w-full lg:inset-y-0 lg:left-auto lg:right-0 lg:h-auto lg:w-1/2">
           <HeroScene />
         </div>
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-background/20 via-transparent to-background lg:bg-gradient-to-r lg:from-background lg:via-background/85 lg:to-transparent" />

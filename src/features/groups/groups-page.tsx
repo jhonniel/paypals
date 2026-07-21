@@ -1,10 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import {
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Users, Loader2, KeyRound } from "lucide-react";
+import { Plus, Users, Loader2, KeyRound, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,13 +25,301 @@ type GroupRow = {
   invite_code: string;
   my_role: string;
   created_at: string;
+  my_owes?: number;
+  my_currency?: string;
+  my_paid?: boolean;
+  my_receipts?: Array<{
+    receipt_id: string;
+    merchant: string | null;
+    currency: string;
+    items: Array<{
+      name: string;
+      quantity: number;
+      amount: number;
+    }>;
+  }>;
 };
+
+function money(value: number, currency = "PHP") {
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
 
 async function fetchGroups(): Promise<GroupRow[]> {
   const res = await fetch("/api/groups");
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load groups");
   return json.data ?? [];
+}
+
+/** Stable pseudo-random 0..1 derived from a string, so each tile floats differently. */
+function seededRandom(seed: string, salt: number) {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 1000) / 1000;
+}
+
+const faceStyle: CSSProperties = {
+  backfaceVisibility: "hidden",
+  WebkitBackfaceVisibility: "hidden",
+  transformStyle: "preserve-3d",
+};
+
+function GroupFlipTile({ group }: { group: GroupRow }) {
+  const [flipped, setFlipped] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [flareKey, setFlareKey] = useState(0);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startRotation: number;
+    width: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressTapRef = useRef(false);
+
+  const owes = group.my_owes ?? 0;
+  const currency = group.my_currency ?? "PHP";
+  const receipts = group.my_receipts ?? [];
+  const itemCount = receipts.reduce(
+    (total, receipt) => total + receipt.items.length,
+    0
+  );
+
+  function snapTo(nextRotation: number) {
+    const turn = Math.round(nextRotation / 180);
+    const nextFlipped = Math.abs(turn) % 2 === 1;
+    if (nextFlipped !== flipped) setFlareKey((k) => k + 1);
+    setFlipped(nextFlipped);
+    setRotation(turn * 180);
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    // Let links work normally.
+    if (target.closest("a")) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startRotation: rotation,
+      width: Math.max(event.currentTarget.getBoundingClientRect().width, 1),
+      moved: false,
+    };
+    setDragging(true);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    const delta = drag.startX - event.clientX;
+    if (Math.abs(delta) > 6) drag.moved = true;
+
+    const next = Math.max(
+      drag.startRotation - 180,
+      Math.min(
+        drag.startRotation + 180,
+        drag.startRotation + (delta / drag.width) * 180
+      )
+    );
+    setRotation(next);
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const delta = drag.startX - event.clientX;
+    const current = Math.max(
+      drag.startRotation - 180,
+      Math.min(
+        drag.startRotation + 180,
+        drag.startRotation + (delta / drag.width) * 180
+      )
+    );
+    const snappedRotation = Math.round(current / 180) * 180;
+
+    if (drag.moved) {
+      suppressTapRef.current = true;
+      window.setTimeout(() => {
+        suppressTapRef.current = false;
+      }, 50);
+      snapTo(snappedRotation);
+    } else {
+      // Tap → flip
+      if (!suppressTapRef.current) snapTo(rotation + 180);
+    }
+
+    dragRef.current = null;
+    setDragging(false);
+  }
+
+  return (
+    <li
+      className="relative aspect-square"
+      style={{ perspective: "900px" } as CSSProperties}
+    >
+      <div
+        className="tile-float relative h-full w-full"
+        style={
+          {
+            // Randomize rhythm per tile so they never float in sync
+            animationDuration: `${4.2 + seededRandom(group.id, 1) * 3.6}s`,
+            animationDelay: `-${(seededRandom(group.id, 2) * 8).toFixed(2)}s`,
+            animationDirection:
+              seededRandom(group.id, 3) > 0.5 ? "normal" : "reverse",
+            animationPlayState: dragging ? "paused" : "running",
+          } as CSSProperties
+        }
+      >
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        className={`relative h-full w-full select-none ${
+          dragging ? "cursor-grabbing" : "cursor-grab"
+        }`}
+        style={
+          {
+            transform: `rotateY(${rotation}deg)`,
+            transformStyle: "preserve-3d",
+            WebkitTransformStyle: "preserve-3d",
+            transition: dragging
+              ? "none"
+              : "transform 450ms cubic-bezier(0.22, 1, 0.36, 1)",
+            touchAction: "none",
+          } as CSSProperties
+        }
+      >
+        {/* Front */}
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border border-border bg-card p-2.5 text-center shadow-sm"
+          style={{ ...faceStyle, transform: "rotateY(0deg)" }}
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-base font-semibold text-accent-foreground">
+            {group.name.trim().charAt(0).toUpperCase() || "G"}
+          </div>
+          <div className="min-w-0 w-full">
+            <p className="truncate text-base font-semibold leading-snug sm:text-lg">
+              {group.name}
+            </p>
+            <p className="truncate text-xs capitalize text-muted-foreground sm:text-sm">
+              {group.my_role}
+              {group.description ? ` · ${group.description}` : ""}
+            </p>
+          </div>
+          {owes > 0 ? (
+            <div className="w-full rounded-lg bg-background/60 px-2 py-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                You owe
+              </p>
+              <p className="truncate text-2xl font-bold leading-tight tabular-nums tracking-tight text-amber-600 dark:text-amber-400 sm:text-3xl">
+                {money(owes, currency)}
+              </p>
+            </div>
+          ) : group.my_paid ? (
+            <p className="rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+              Paid
+            </p>
+          ) : null}
+          {flareKey > 0 && (
+            <span
+              key={`front-flare-${flareKey}`}
+              className="card-flare pointer-events-none absolute inset-y-[-15%] left-0 w-2/3 bg-gradient-to-r from-transparent via-white/25 to-transparent blur-md dark:via-white/15"
+              aria-hidden
+            />
+          )}
+        </div>
+
+        {/* Back */}
+        <div
+          className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-sm"
+          style={{ ...faceStyle, transform: "rotateY(180deg)" }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{group.name}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {itemCount} item{itemCount === 1 ? "" : "s"}
+              </p>
+            </div>
+          </div>
+
+          <div className="my-2 min-h-0 flex-1 overflow-y-auto pr-1">
+            {itemCount > 0 ? (
+              <div className="space-y-2">
+                {receipts.map((receipt) => (
+                  <div key={receipt.receipt_id}>
+                    {receipt.merchant ? (
+                      <p className="mb-0.5 truncate text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {receipt.merchant}
+                      </p>
+                    ) : null}
+                    <ul className="space-y-0.5">
+                      {receipt.items.map((item, index) => (
+                        <li
+                          key={`${receipt.receipt_id}-${item.name}-${index}`}
+                          className="flex items-baseline justify-between gap-1 text-[10px] sm:text-xs"
+                        >
+                          <span className="min-w-0 truncate">
+                            {item.name}
+                            {item.quantity > 1 ? ` ×${item.quantity}` : ""}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {money(item.amount, receipt.currency)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-center text-xs text-muted-foreground">
+                No assigned items yet
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-border/60 pt-2">
+            <span className="text-sm font-semibold tabular-nums">
+              {group.my_paid ? "Paid" : money(owes, currency)}
+            </span>
+            <Link
+              href={`/groups/${group.id}`}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-primary"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Open <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+          {flareKey > 0 && (
+            <span
+              key={`back-flare-${flareKey}`}
+              className="card-flare pointer-events-none absolute inset-y-[-15%] left-0 w-2/3 bg-gradient-to-r from-transparent via-white/25 to-transparent blur-md dark:via-white/15"
+              aria-hidden
+            />
+          )}
+        </div>
+      </div>
+      </div>
+    </li>
+  );
 }
 
 export function GroupsPageView() {
@@ -76,7 +369,6 @@ export function GroupsPageView() {
       toast.error("Enter a valid invite code");
       return;
     }
-    // Always use the invite page so name-picking works when seats exist
     router.push(`/invite/${encodeURIComponent(code)}`);
   }
 
@@ -218,27 +510,9 @@ export function GroupsPageView() {
         </Card>
       )}
 
-      <ul className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
         {(data ?? []).map((g) => (
-          <li key={g.id}>
-            <Link
-              href={`/groups/${g.id}`}
-              className="glass flex h-full min-h-[7.5rem] flex-col justify-between gap-3 rounded-2xl p-3 transition hover:bg-muted/40 sm:min-h-[8.5rem] sm:p-4"
-            >
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-sm font-semibold text-accent-foreground">
-                {g.name.trim().charAt(0).toUpperCase() || "G"}
-              </div>
-              <div className="min-w-0">
-                <p className="line-clamp-2 text-sm font-medium leading-snug sm:text-base">
-                  {g.name}
-                </p>
-                <p className="mt-1 truncate text-[11px] capitalize text-muted-foreground sm:text-xs">
-                  {g.my_role}
-                  {g.description ? ` · ${g.description}` : ""}
-                </p>
-              </div>
-            </Link>
-          </li>
+          <GroupFlipTile key={g.id} group={g} />
         ))}
       </ul>
     </div>
