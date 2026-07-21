@@ -157,8 +157,16 @@ export async function updateSession(request: NextRequest) {
       return NextResponse.redirect(new URL(next, request.url));
     }
 
+    // Unverified session on login/signup: clear it so "Sign in" from the
+    // landing page shows the login form instead of forcing an invite code.
     if (isAuthRoute && !inviteVerified) {
-      return NextResponse.redirect(new URL("/claim-invite", request.url));
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        /* ignore */
+      }
+      clearSupabaseCookies(supabaseResponse, request);
+      return supabaseResponse;
     }
   }
 
