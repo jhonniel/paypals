@@ -1,7 +1,7 @@
+import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
-import { fromZod, fail, ok, tooManyRequests } from "@/lib/api";
+import { fromZod, fail, tooManyRequests } from "@/lib/api";
 import { publicEnv } from "@/lib/env";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { sendAccessConfirmedEmail } from "@/lib/email/notify";
@@ -12,6 +12,27 @@ const schema = z.object({
   fullName: z.string().min(2),
   inviteCode: z.string().min(4).max(64),
 });
+
+type CookieEntry = {
+  name: string;
+  value: string;
+  options?: Record<string, unknown>;
+};
+
+function applyCookies(response: NextResponse, cookieJar: CookieEntry[]) {
+  const secure = process.env.NODE_ENV === "production";
+  for (const { name, value, options } of cookieJar) {
+    response.cookies.set(name, value, {
+      ...(options as Record<string, unknown>),
+      secure: secure || Boolean(options?.secure),
+      sameSite:
+        (options?.sameSite as "lax" | "strict" | "none" | undefined) ?? "lax",
+      httpOnly: options?.httpOnly !== false,
+      path: typeof options?.path === "string" ? options.path : "/",
+    });
+  }
+  return response;
+}
 
 export async function POST(request: Request) {
   const ip = clientIp(request);
@@ -36,20 +57,15 @@ export async function POST(request: Request) {
   if (!parsed.success) return fromZod(parsed.error);
 
   const inviteCode = parsed.data.inviteCode.trim();
-  const cookieStore = await cookies();
+  const cookieJar: CookieEntry[] = [];
+
   const supabase = createServerClient(url, key, {
     cookies: {
       getAll() {
-        return cookieStore.getAll();
+        return [];
       },
       setAll(cookiesToSet) {
-        try {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          );
-        } catch {
-          /* ignore */
-        }
+        cookieJar.push(...cookiesToSet);
       },
     },
   });
@@ -93,11 +109,7 @@ export async function POST(request: Request) {
 
   // Invite-only apps: confirm email immediately when service role is available,
   // then redeem the invite so login works without waiting on a confirm link.
-  if (
-    data.user &&
-    !data.session &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  ) {
+  if (data.user && !data.session && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const admin = createAdminClient();
@@ -109,6 +121,8 @@ export async function POST(request: Request) {
         },
       });
 
+      // Fresh jar for the post-confirm sign-in session
+      cookieJar.length = 0;
       const { data: signedIn, error: signInError } =
         await supabase.auth.signInWithPassword({
           email: parsed.data.email,
@@ -131,13 +145,73 @@ export async function POST(request: Request) {
       { p_code: inviteCode }
     );
     if (redeemError) {
-      console.error(redeemError);
+      console.error("[signup] redeem failed", redeemError);
     } else {
-      const r = redeemResult as { ok?: boolean };
+      const r = redeemResult as { ok?: boolean; reason?: string } | null;
       redeemed = Boolean(r?.ok);
+      if (!redeemed) {
+        console.error("[signup] redeem returned", r);
+      }
     }
 
-    if (redeemed && data.user?.email) {
+    // Admin fallback if RPC didn't mark the profile verified
+    if (!redeemed && data.user && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        const { createAdminClient } = await import("@/lib/supabase/admin");
+        const admin = createAdminClient();
+        const { error: profileError } = await admin
+          .from("profiles")
+          .update({ invite_verified: true })
+          .eq("id", data.user.id);
+
+        if (!profileError) {
+          redeemed = true;
+          // Best-effort: mark invite used (service role has no auth.uid for RPC)
+          const cleaned = inviteCode.toLowerCase();
+          const { data: inviteRow } = await admin
+            .from("signup_invites")
+            .select("id, use_count, max_uses, code")
+            .ilike("code", cleaned)
+            .maybeSingle();
+          if (inviteRow) {
+            const nextCount = Number(inviteRow.use_count ?? 0) + 1;
+            const maxUses = inviteRow.max_uses == null ? null : Number(inviteRow.max_uses);
+            await admin
+              .from("signup_invites")
+              .update({
+                use_count: nextCount,
+                ...(maxUses != null && nextCount >= maxUses
+                  ? { enabled: false }
+                  : {}),
+              })
+              .eq("id", inviteRow.id);
+          }
+        }
+      } catch (e) {
+        console.error("[signup] admin verify fallback failed", e);
+      }
+    }
+
+    if (!redeemed) {
+      await supabase.auth.signOut().catch(() => null);
+      const failed = NextResponse.json(
+        {
+          error: {
+            code: "INVITE_REDEEM_FAILED",
+            message:
+              "Account was created but the invite could not be applied. Ask an admin for a fresh invite code, then try again from Sign in → claim invite.",
+          },
+        },
+        { status: 400 }
+      );
+      // Clear any partial session cookies
+      for (const { name } of cookieJar) {
+        failed.cookies.set(name, "", { path: "/", maxAge: 0 });
+      }
+      return failed;
+    }
+
+    if (data.user?.email) {
       void sendAccessConfirmedEmail({
         to: data.user.email,
         name: parsed.data.fullName,
@@ -145,11 +219,15 @@ export async function POST(request: Request) {
     }
   }
 
-  return ok({
-    user: data.user ? { id: data.user.id, email: data.user.email } : null,
-    needsConfirmation: !data.session,
-    redeemed,
-    groupId: null,
-    redirectTo: "/dashboard",
+  const response = NextResponse.json({
+    data: {
+      user: data.user ? { id: data.user.id, email: data.user.email } : null,
+      needsConfirmation: !data.session,
+      redeemed,
+      groupId: null,
+      redirectTo: "/dashboard",
+    },
   });
+
+  return applyCookies(response, cookieJar);
 }

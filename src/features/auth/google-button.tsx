@@ -27,9 +27,20 @@ function setOAuthCookies(
       : "";
   if (invite && invite.length >= 4) {
     document.cookie = `paypals_oauth_invite=${encodeURIComponent(invite)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+    try {
+      sessionStorage.setItem("paypals_oauth_invite", invite);
+    } catch {
+      /* ignore */
+    }
   }
   document.cookie = `paypals_oauth_next=${encodeURIComponent(next)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
   document.cookie = `paypals_oauth_mode=${encodeURIComponent(mode)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+  try {
+    sessionStorage.setItem("paypals_oauth_mode", mode);
+    sessionStorage.setItem("paypals_oauth_next", next);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function GoogleButton({

@@ -130,7 +130,9 @@ export function SignupForm() {
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setFormError(json?.error?.message ?? "Signup failed");
+        const message = json?.error?.message ?? "Signup failed";
+        setFormError(message);
+        toast.error(message);
         return;
       }
 

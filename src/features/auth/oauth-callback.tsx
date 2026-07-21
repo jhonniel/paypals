@@ -16,6 +16,14 @@ function readCookie(name: string): string {
   return decodeURIComponent(match.split("=").slice(1).join("=") || "");
 }
 
+function readStorage(name: string): string {
+  try {
+    return sessionStorage.getItem(name) || "";
+  } catch {
+    return "";
+  }
+}
+
 function clearOAuthHelperCookies() {
   for (const name of [
     "paypals_oauth_invite",
@@ -23,6 +31,11 @@ function clearOAuthHelperCookies() {
     "paypals_oauth_mode",
   ]) {
     document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+    try {
+      sessionStorage.removeItem(name);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -64,11 +77,15 @@ export function OAuthCallbackClient() {
         "";
 
       const modeParam =
-        searchParams.get("mode") || readCookie("paypals_oauth_mode") || "login";
+        searchParams.get("mode") ||
+        readCookie("paypals_oauth_mode") ||
+        readStorage("paypals_oauth_mode") ||
+        "login";
       const mode = modeParam === "signup" ? "signup" : "login";
       const next = safeRedirectPath(
         searchParams.get("next") ||
           readCookie("paypals_oauth_next") ||
+          readStorage("paypals_oauth_next") ||
           "/dashboard",
         "/dashboard"
       );
@@ -76,6 +93,7 @@ export function OAuthCallbackClient() {
         searchParams.get("invite")?.trim() ||
         searchParams.get("invite_code")?.trim() ||
         readCookie("paypals_oauth_invite") ||
+        readStorage("paypals_oauth_invite") ||
         "";
 
       const failToAuth = (errorCode: string) => {
@@ -171,6 +189,22 @@ export function OAuthCallbackClient() {
             }
             go(r.group_id ? `/groups/${r.group_id}` : next);
             return;
+          }
+
+          // Server-side claim as fallback (handles RPC/profile race)
+          try {
+            const claimRes = await fetch("/api/auth/claim-invite", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ inviteCode: inviteToRedeem }),
+            });
+            if (claimRes.ok) {
+              clearOAuthHelperCookies();
+              go(next);
+              return;
+            }
+          } catch {
+            /* ignore */
           }
         }
 
