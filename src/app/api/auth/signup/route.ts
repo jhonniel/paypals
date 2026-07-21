@@ -5,6 +5,7 @@ import { fromZod, fail, tooManyRequests } from "@/lib/api";
 import { publicEnv } from "@/lib/env";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { sendAccessConfirmedEmail } from "@/lib/email/notify";
+import { redeemSignupInviteForUser } from "@/lib/redeem-invite";
 
 const schema = z.object({
   email: z.string().email(),
@@ -107,8 +108,6 @@ export async function POST(request: Request) {
 
   if (error) return fail(error.message, 400, "SIGNUP_FAILED");
 
-  // Invite-only apps: confirm email immediately when service role is available,
-  // then redeem the invite so login works without waiting on a confirm link.
   if (data.user && !data.session && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
       const { createAdminClient } = await import("@/lib/supabase/admin");
@@ -121,7 +120,6 @@ export async function POST(request: Request) {
         },
       });
 
-      // Fresh jar for the post-confirm sign-in session
       cookieJar.length = 0;
       const { data: signedIn, error: signInError } =
         await supabase.auth.signInWithPassword({
@@ -139,58 +137,13 @@ export async function POST(request: Request) {
 
   let redeemed = false;
 
-  if (data.session) {
-    const { data: redeemResult, error: redeemError } = await supabase.rpc(
-      "redeem_signup_invite",
-      { p_code: inviteCode }
+  if (data.session && data.user) {
+    const result = await redeemSignupInviteForUser(
+      supabase,
+      inviteCode,
+      data.user.id
     );
-    if (redeemError) {
-      console.error("[signup] redeem failed", redeemError);
-    } else {
-      const r = redeemResult as { ok?: boolean; reason?: string } | null;
-      redeemed = Boolean(r?.ok);
-      if (!redeemed) {
-        console.error("[signup] redeem returned", r);
-      }
-    }
-
-    // Admin fallback if RPC didn't mark the profile verified
-    if (!redeemed && data.user && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        const { createAdminClient } = await import("@/lib/supabase/admin");
-        const admin = createAdminClient();
-        const { error: profileError } = await admin
-          .from("profiles")
-          .update({ invite_verified: true })
-          .eq("id", data.user.id);
-
-        if (!profileError) {
-          redeemed = true;
-          // Best-effort: mark invite used (service role has no auth.uid for RPC)
-          const cleaned = inviteCode.toLowerCase();
-          const { data: inviteRow } = await admin
-            .from("signup_invites")
-            .select("id, use_count, max_uses, code")
-            .ilike("code", cleaned)
-            .maybeSingle();
-          if (inviteRow) {
-            const nextCount = Number(inviteRow.use_count ?? 0) + 1;
-            const maxUses = inviteRow.max_uses == null ? null : Number(inviteRow.max_uses);
-            await admin
-              .from("signup_invites")
-              .update({
-                use_count: nextCount,
-                ...(maxUses != null && nextCount >= maxUses
-                  ? { enabled: false }
-                  : {}),
-              })
-              .eq("id", inviteRow.id);
-          }
-        }
-      } catch (e) {
-        console.error("[signup] admin verify fallback failed", e);
-      }
-    }
+    redeemed = result.ok;
 
     if (!redeemed) {
       await supabase.auth.signOut().catch(() => null);
@@ -199,19 +152,20 @@ export async function POST(request: Request) {
           error: {
             code: "INVITE_REDEEM_FAILED",
             message:
-              "Account was created but the invite could not be applied. Ask an admin for a fresh invite code, then try again from Sign in → claim invite.",
+              result.reason === "exhausted"
+                ? "This invite was already used — ask an admin for a new one."
+                : "Account was created but the invite could not be applied. Ask an admin for a fresh invite, then use Claim invite after signing in.",
           },
         },
         { status: 400 }
       );
-      // Clear any partial session cookies
       for (const { name } of cookieJar) {
         failed.cookies.set(name, "", { path: "/", maxAge: 0 });
       }
       return failed;
     }
 
-    if (data.user?.email) {
+    if (data.user.email) {
       void sendAccessConfirmedEmail({
         to: data.user.email,
         name: parsed.data.fullName,

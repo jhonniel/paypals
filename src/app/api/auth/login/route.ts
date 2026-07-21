@@ -113,11 +113,15 @@ export async function POST(request: NextRequest) {
           ? data.user.user_metadata.invite_code.trim()
           : "";
       if (metaInvite) {
-        const { data: redeemed } = await supabase.rpc("redeem_signup_invite", {
-          p_code: metaInvite,
-        });
-        const r = redeemed as { ok?: boolean } | null;
-        if (r?.ok) {
+        const { redeemSignupInviteForUser } = await import(
+          "@/lib/redeem-invite"
+        );
+        const redeemed = await redeemSignupInviteForUser(
+          supabase,
+          metaInvite,
+          data.user.id
+        );
+        if (redeemed.ok) {
           verified = true;
           try {
             const { sendAccessConfirmedEmail } = await import(

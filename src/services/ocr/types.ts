@@ -11,6 +11,8 @@ export type OcrLineItem = {
   unitPrice: number;
   totalPrice: number;
   confidence?: number;
+  /** Modifiers / add-ons under this line (e.g. -TALL, ICE) */
+  subItems?: Array<{ name: string; amount?: number | null }>;
 };
 
 export type OcrResult = {

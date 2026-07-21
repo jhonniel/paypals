@@ -36,6 +36,8 @@ import {
   type PaymentMethod,
 } from "@/lib/payment-methods";
 import { cn } from "@/utils/cn";
+import { ItemBreakdownList } from "@/components/item-breakdown-list";
+import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
 
 type Member = {
   id: string;
@@ -126,6 +128,7 @@ type GroupDetail = {
       quantity: number;
       amount: number;
       merchant: string | null;
+      sub_items?: ReceiptSubItem[];
     }>;
   }>;
   where_to_pay?: Array<{
@@ -1286,22 +1289,11 @@ export function GroupDetailView({
 
                   <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
                     {items.length > 0 ? (
-                      <ul className="space-y-1.5">
-                        {items.map((item, idx) => (
-                          <li
-                            key={`${m.id}-back-${item.name}-${idx}`}
-                            className="flex items-baseline justify-between gap-2 text-xs"
-                          >
-                            <span className="min-w-0 truncate text-muted-foreground">
-                              {titleCaseItem(item.name)}
-                              {item.quantity > 1 ? ` ×${item.quantity}` : ""}
-                            </span>
-                            <span className="shrink-0 tabular-nums">
-                              {money(item.amount, payCurrency)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
+                      <ItemBreakdownList
+                        items={items}
+                        currency={payCurrency}
+                        titleCase={titleCaseItem}
+                      />
                     ) : (
                       <p className="text-[11px] italic text-muted-foreground/70">
                         No items yet

@@ -1,21 +1,6 @@
--- Single-use, unique admin signup invites
+-- Fix: validation->>'valid' is text; NOT requires boolean.
+-- Error was: "argument of NOT must be type boolean, not type text"
 
--- Default new rows to one use
-ALTER TABLE public.signup_invites
-  ALTER COLUMN max_uses SET DEFAULT 1;
-
--- Existing unlimited / multi-use → single use (and disable already exhausted)
-UPDATE public.signup_invites
-SET max_uses = 1,
-    updated_at = now()
-WHERE max_uses IS NULL OR max_uses > 1;
-
-UPDATE public.signup_invites
-SET enabled = false,
-    updated_at = now()
-WHERE use_count >= COALESCE(max_uses, 1);
-
--- Redeem: bump use count, disable when exhausted (single-use → off after first use)
 CREATE OR REPLACE FUNCTION public.redeem_signup_invite(p_code text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -37,7 +22,7 @@ BEGIN
   END IF;
 
   validation := public.validate_signup_invite(cleaned);
-  IF NOT COALESCE((validation->>'valid')::boolean, false) THEN
+  IF COALESCE((validation->>'valid')::boolean, false) IS NOT TRUE THEN
     RETURN jsonb_build_object(
       'ok', false,
       'reason', COALESCE(validation->>'reason', 'invalid')
@@ -86,5 +71,7 @@ BEGIN
   );
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.redeem_signup_invite(text) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

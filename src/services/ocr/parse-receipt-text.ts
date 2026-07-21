@@ -118,11 +118,55 @@ function extractPosItems(lines: string[]): OcrLineItem[] {
 
     if (!name) continue;
 
+    const subItems: NonNullable<OcrLineItem["subItems"]> = [];
+    for (let k = i + 1; k < lines.length; k++) {
+      const next = lines[k];
+      if (extractQtyPrice(next)) break;
+      if (isSummaryLabel(next) || isSkipLine(next)) break;
+      if (looksLikeItemName(next) && !MODIFIER_RE.test(next)) break;
+
+      if (MODIFIER_RE.test(next)) {
+        const cleaned = next.replace(MODIFIER_RE, "").trim();
+        if (!cleaned) continue;
+        // Split comma-separated modifiers into individual sub-items
+        const parts = cleaned
+          .split(/[,/|]+/)
+          .map((p) => p.trim())
+          .filter((p) => p.length >= 1);
+        for (const part of parts.length ? parts : [cleaned]) {
+          const moneyAtEnd = part.match(/^(.*?)([\d,]+\.\d{2})\s*$/);
+          if (moneyAtEnd && moneyAtEnd[1].trim()) {
+            subItems.push({
+              name: moneyAtEnd[1].trim().slice(0, 80),
+              amount: parseMoney(moneyAtEnd[2]),
+            });
+          } else {
+            subItems.push({ name: part.slice(0, 80), amount: null });
+          }
+        }
+        continue;
+      }
+
+      // Soft modifier without leading dash (common OCR miss)
+      if (
+        next.length <= 40 &&
+        /^(?:tall|grande|venti|short|hot|iced?|dine\s*in|take\s*out|for\s*here|to\s*go|extra|no\s+)/i.test(
+          next
+        )
+      ) {
+        subItems.push({ name: next.slice(0, 80), amount: null });
+        continue;
+      }
+
+      break;
+    }
+
     items.push({
       name: name.replace(/^[\d.]+\s+/, "").slice(0, 80),
       quantity: qty.quantity,
       unitPrice: qty.unitPrice,
       totalPrice: qty.totalPrice,
+      ...(subItems.length ? { subItems } : {}),
     });
   }
 

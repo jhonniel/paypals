@@ -101,17 +101,19 @@ export async function POST(_request: Request, { params }: Params) {
     await supabase.from("receipt_items").delete().eq("receipt_id", id);
 
     if (ocrResult.items.length > 0) {
-      const { error: itemsError } = await supabase.from("receipt_items").insert(
-        ocrResult.items.map((item, index) => ({
-          receipt_id: id,
-          name: item.name.slice(0, 200),
+      const { insertReceiptItems } = await import("@/lib/insert-receipt-items");
+      const { error: itemsError } = await insertReceiptItems(
+        supabase,
+        id,
+        ocrResult.items.map((item) => ({
+          name: item.name,
           quantity: item.quantity,
-          unit_price: item.unitPrice,
-          total_price: item.totalPrice,
-          sort_order: index,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+          subItems: item.subItems,
         }))
       );
-      if (itemsError) return fail(itemsError.message, 400);
+      if (itemsError) return fail(itemsError, 400);
     }
 
     const totals = computeReceiptTotals({

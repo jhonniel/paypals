@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, fail, fromZod, serverError } from "@/lib/api";
 import { sendAccessConfirmedEmail } from "@/lib/email/notify";
+import { redeemSignupInviteForUser } from "@/lib/redeem-invite";
 
 const schema = z.object({
   inviteCode: z.string().min(4).max(64),
@@ -16,16 +17,15 @@ export async function POST(request: Request) {
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return fromZod(parsed.error);
 
-    const { data, error } = await supabase.rpc("redeem_signup_invite", {
-      p_code: parsed.data.inviteCode,
-    });
+    const result = await redeemSignupInviteForUser(
+      supabase,
+      parsed.data.inviteCode,
+      user.id
+    );
 
-    if (error) return fail(error.message, 400);
-
-    const result = data as { ok?: boolean; reason?: string; group_id?: string };
-    if (!result?.ok) {
+    if (!result.ok) {
       return fail(
-        result?.reason === "exhausted"
+        result.reason === "exhausted"
           ? "This invite has reached its limit"
           : "Invalid invite code — ask an admin for a signup invite",
         400,

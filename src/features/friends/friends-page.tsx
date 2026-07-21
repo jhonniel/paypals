@@ -20,6 +20,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
+import { ItemBreakdownList } from "@/components/item-breakdown-list";
+import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
 
 type FriendRow = {
   id: string;
@@ -63,7 +65,12 @@ type FriendBalanceRow = {
       receipt_date: string | null;
       currency: string;
       amount: number;
-      items: Array<{ name: string; quantity: number; amount: number }>;
+      items: Array<{
+        name: string;
+        quantity: number;
+        amount: number;
+        sub_items?: ReceiptSubItem[];
+      }>;
     }>;
   }>;
 };
@@ -630,27 +637,12 @@ function FriendUnpaidModal({
                           {money(receipt.amount, receipt.currency)}
                         </span>
                       </div>
-                      <ul className="divide-y divide-border/60 px-3">
-                        {receipt.items.map((item, idx) => (
-                          <li
-                            key={`${receipt.receipt_id}-${idx}`}
-                            className="flex items-center justify-between gap-2 py-2 text-sm"
-                          >
-                            <span className="min-w-0 truncate">
-                              {item.name}
-                              {item.quantity > 1 ? (
-                                <span className="text-muted-foreground">
-                                  {" "}
-                                  ×{item.quantity}
-                                </span>
-                              ) : null}
-                            </span>
-                            <span className="shrink-0 tabular-nums text-muted-foreground">
-                              {money(item.amount, receipt.currency)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
+                      <div className="px-3 py-2">
+                        <ItemBreakdownList
+                          items={receipt.items}
+                          currency={receipt.currency}
+                        />
+                      </div>
                     </li>
                   ))}
                 </ul>

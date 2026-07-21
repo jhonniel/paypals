@@ -37,6 +37,7 @@ export type EditorItem = {
   /** among_n = set number (default 1 = one person), among_group = group size */
   split_mode?: "among_n" | "among_group" | "among_claimers";
   split_n?: number | null;
+  sub_items?: Array<{ name: string; amount?: number | null }>;
 };
 
 type ReceiptPayload = {
@@ -66,6 +67,7 @@ type ReceiptPayload = {
     sort_order: number;
     split_mode?: string | null;
     split_n?: number | null;
+    sub_items?: Array<{ name: string; amount?: number | null }> | null;
   }>;
   imageUrl: string | null;
   canEdit: boolean;
@@ -160,6 +162,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
         selected: false,
         split_mode: (i.split_mode as EditorItem["split_mode"]) ?? "among_n",
         split_n: i.split_n ?? 1,
+        sub_items: Array.isArray(i.sub_items) ? i.sub_items : [],
       }));
       setMerchant(nextMerchant);
       setDate(nextDate);
@@ -428,6 +431,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
               selected: false,
               split_mode: (i.split_mode as EditorItem["split_mode"]) ?? "among_n",
               split_n: i.split_n ?? 1,
+              sub_items: Array.isArray(i.sub_items) ? i.sub_items : [],
             }));
             setItems(nextItems);
             setGroupId(data.receipt.group_id ?? null);
@@ -715,6 +719,23 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                               ) : (
                                 <p className="font-medium leading-snug">{item.name}</p>
                               )}
+                              {(item.sub_items?.length ?? 0) > 0 ? (
+                                <ul className="space-y-0.5 border-l border-border/70 pl-2.5">
+                                  {item.sub_items!.map((sub, subIdx) => (
+                                    <li
+                                      key={`${item.key}-sub-${subIdx}`}
+                                      className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground"
+                                    >
+                                      <span className="min-w-0 truncate">{sub.name}</span>
+                                      {sub.amount != null && Number(sub.amount) > 0 ? (
+                                        <span className="shrink-0 tabular-nums">
+                                          {formatPHP(Number(sub.amount), currency)}
+                                        </span>
+                                      ) : null}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
 
                               <div className="grid grid-cols-3 gap-2">
                                 {canEdit ? (
@@ -893,6 +914,23 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                 ) : (
                                   <span className="font-medium">{item.name}</span>
                                 )}
+                                {(item.sub_items?.length ?? 0) > 0 ? (
+                                  <ul className="mt-1 space-y-0.5 border-l border-border/70 pl-2">
+                                    {item.sub_items!.map((sub, subIdx) => (
+                                      <li
+                                        key={`${item.key}-desk-sub-${subIdx}`}
+                                        className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground"
+                                      >
+                                        <span className="min-w-0 truncate">{sub.name}</span>
+                                        {sub.amount != null && Number(sub.amount) > 0 ? (
+                                          <span className="shrink-0 tabular-nums">
+                                            {formatPHP(Number(sub.amount), currency)}
+                                          </span>
+                                        ) : null}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : null}
                               </td>
                               <td className="px-2 py-2 align-middle">
                                 {canEdit ? (

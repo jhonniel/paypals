@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { moneyNumber } from "@/lib/money";
 import {
+  normalizeSubItems,
+  type ReceiptSubItem,
+} from "@/lib/receipt-sub-items";
+import {
   computeSplitBalances,
   type AssignmentInput,
   type ItemSplitInput,
@@ -11,6 +15,7 @@ export type MemberPaymentItem = {
   name: string;
   quantity: number;
   amount: number;
+  sub_items?: ReceiptSubItem[];
 };
 
 export type MemberPaymentReceipt = {
@@ -61,11 +66,26 @@ async function loadGroupReceiptsWithAssignments(
     .from("receipts")
     .select(
       `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
-       receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n)`
+       receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n, sub_items)`
     )
     .eq("group_id", groupId)
     .order("created_at", { ascending: false })
     .limit(50);
+
+  if (
+    receiptsQuery.error &&
+    /sub_items|column/i.test(receiptsQuery.error.message)
+  ) {
+    receiptsQuery = (await supabase
+      .from("receipts")
+      .select(
+        `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+         receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n)`
+      )
+      .eq("group_id", groupId)
+      .order("created_at", { ascending: false })
+      .limit(50)) as typeof receiptsQuery;
+  }
 
   if (
     receiptsQuery.error &&
@@ -145,7 +165,13 @@ export async function getGroupMemberPayments(
       total_price: number;
       split_mode: string | null;
       split_n: number | null;
+      sub_items?: unknown;
     }>;
+
+    const subItemsById = new Map<string, ReceiptSubItem[]>();
+    for (const item of items) {
+      subItemsById.set(item.id, normalizeSubItems(item.sub_items));
+    }
 
     const splitItems: ItemSplitInput[] = items.map((item) => {
       const asg = assignmentsByItem.get(item.id) ?? [];
@@ -198,10 +224,12 @@ export async function getGroupMemberPayments(
           asg?.share_quantity != null && asg.share_quantity > 0
             ? Number(asg.share_quantity)
             : 1;
+        const subs = subItemsById.get(line.itemId) ?? [];
         receiptItems.push({
           name: line.itemName,
           quantity: qty,
           amount: moneyNumber(line.amount),
+          ...(subs.length ? { sub_items: subs } : {}),
         });
       }
 

@@ -25,7 +25,7 @@ export class OpenAIVisionProvider implements OcrProvider {
           {
             role: "system",
             content:
-              "Extract receipt data as JSON with keys: merchant, date, time, items (array of {name, quantity, unitPrice, totalPrice}), subtotal, discount, serviceCharge, tip, total, confidence (0-100). Prefer Amount Due as total. Do not extract tax/VAT as a separate field — set tax unused. Use numbers for money. Currency is PHP unless clearly otherwise.",
+              "Extract receipt data as JSON with keys: merchant, date, time, items (array of {name, quantity, unitPrice, totalPrice, subItems}), subtotal, discount, serviceCharge, tip, total, confidence (0-100). Prefer Amount Due as total. Do not extract tax/VAT as a separate field — set tax unused. Use numbers for money. Currency is PHP unless clearly otherwise. Put modifiers/add-ons (size, ice, dine-in, extras) in subItems as [{name, amount?}] under the parent menu item — do not invent separate parent rows for modifiers.",
           },
           {
             role: "user",
@@ -77,6 +77,19 @@ export class OpenAIVisionProvider implements OcrProvider {
         totalPrice:
           Number(i.totalPrice) ||
           (Number(i.quantity) || 1) * (Number(i.unitPrice) || 0),
+        subItems: Array.isArray(
+          (i as { subItems?: unknown }).subItems
+        )
+          ? (
+              (i as { subItems: Array<{ name?: string; amount?: number }> })
+                .subItems
+            )
+              .map((s) => ({
+                name: String(s.name ?? "").trim(),
+                amount: s.amount == null ? null : Number(s.amount),
+              }))
+              .filter((s) => s.name)
+          : undefined,
       })),
       subtotal: parsed.subtotal ?? null,
       tax: null,

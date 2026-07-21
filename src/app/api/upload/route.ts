@@ -248,19 +248,21 @@ export async function POST(request: Request) {
     }
 
     if (ocrResult.items.length > 0) {
-      const { error: itemsError } = await supabase.from("receipt_items").insert(
-        ocrResult.items.map((item, index) => ({
-          receipt_id: receiptId,
-          name: item.name.slice(0, 200),
+      const { insertReceiptItems } = await import("@/lib/insert-receipt-items");
+      const { error: itemsError } = await insertReceiptItems(
+        supabase,
+        receiptId,
+        ocrResult.items.map((item) => ({
+          name: item.name,
           quantity: item.quantity,
-          unit_price: item.unitPrice,
-          total_price: item.totalPrice,
-          sort_order: index,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+          subItems: item.subItems,
         }))
       );
       if (itemsError) {
         console.error("receipt_items insert", itemsError);
-        return fail(`Could not save line items: ${itemsError.message}`, 400);
+        return fail(`Could not save line items: ${itemsError}`, 400);
       }
     }
 

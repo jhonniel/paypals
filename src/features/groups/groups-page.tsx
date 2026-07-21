@@ -17,6 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ItemBreakdownList } from "@/components/item-breakdown-list";
+import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
 
 type GroupRow = {
   id: string;
@@ -36,6 +38,7 @@ type GroupRow = {
       name: string;
       quantity: number;
       amount: number;
+      sub_items?: ReceiptSubItem[];
     }>;
   }>;
 };
@@ -270,22 +273,11 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                         {receipt.merchant}
                       </p>
                     ) : null}
-                    <ul className="space-y-0.5">
-                      {receipt.items.map((item, index) => (
-                        <li
-                          key={`${receipt.receipt_id}-${item.name}-${index}`}
-                          className="flex items-baseline justify-between gap-1 text-[10px] sm:text-xs"
-                        >
-                          <span className="min-w-0 truncate">
-                            {item.name}
-                            {item.quantity > 1 ? ` ×${item.quantity}` : ""}
-                          </span>
-                          <span className="shrink-0 tabular-nums text-muted-foreground">
-                            {money(item.amount, receipt.currency)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                    <ItemBreakdownList
+                      items={receipt.items}
+                      currency={receipt.currency}
+                      dense
+                    />
                   </div>
                 ))}
               </div>

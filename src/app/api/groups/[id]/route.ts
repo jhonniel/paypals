@@ -20,6 +20,7 @@ import {
   type ItemSplitInput,
   type ItemSplitMode,
 } from "@/lib/splits";
+import { normalizeSubItems } from "@/lib/receipt-sub-items";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -74,7 +75,7 @@ export async function GET(_req: Request, { params }: Params) {
           `id, merchant, total, currency, status, receipt_date, receipt_time,
            subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
            paid_by_member_id,
-           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n),
+           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n, sub_items),
            receipt_images(id),
            profiles:created_by(full_name, username)`
         )
@@ -85,13 +86,31 @@ export async function GET(_req: Request, { params }: Params) {
       receiptsError = first.error;
     }
 
+    if (receiptsError && /sub_items|column/i.test(receiptsError.message)) {
+      const withoutSubs = await supabase
+        .from("receipts")
+        .select(
+          `id, merchant, total, currency, status, receipt_date, receipt_time,
+           subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
+           paid_by_member_id,
+           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n),
+           receipt_images(id),
+           profiles:created_by(full_name, username)`
+        )
+        .eq("group_id", id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      receipts = withoutSubs.data;
+      receiptsError = withoutSubs.error;
+    }
+
     if (receiptsError && /paid_by_member_id|column/i.test(receiptsError.message)) {
       const withoutPaidBy = await supabase
         .from("receipts")
         .select(
           `id, merchant, total, currency, status, receipt_date, receipt_time,
            subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
-           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n),
+           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n, sub_items),
            receipt_images(id),
            profiles:created_by(full_name, username)`
         )
@@ -231,6 +250,9 @@ export async function GET(_req: Request, { params }: Params) {
             total_price: Number(i.total_price),
             split_mode: mode,
             split_n: splitN,
+            sub_items: normalizeSubItems(
+              (i as { sub_items?: unknown }).sub_items
+            ),
             claimer_ids: claimerIds,
             claimed_by: claimerIds.map((id) => memberNameById.get(id) ?? "Member"),
             claimed_quantity: claimedQty,
@@ -277,12 +299,23 @@ export async function GET(_req: Request, { params }: Params) {
           quantity: number;
           amount: number;
           merchant: string | null;
+          sub_items?: ReturnType<typeof normalizeSubItems>;
         }>;
       }
     >();
 
     for (const mid of memberIds) {
       memberPayAcc.set(mid, { total: 0, currency: "PHP", items: [] });
+    }
+
+    const subItemsByItemId = new Map<string, ReturnType<typeof normalizeSubItems>>();
+    for (const r of detailed) {
+      for (const item of r.items) {
+        subItemsByItemId.set(
+          item.id,
+          normalizeSubItems((item as { sub_items?: unknown }).sub_items)
+        );
+      }
     }
 
     for (const r of detailed) {
@@ -339,6 +372,9 @@ export async function GET(_req: Request, { params }: Params) {
             quantity: qty,
             amount: moneyNumber(line.amount),
             merchant: r.merchant,
+            ...(subItemsByItemId.get(line.itemId)?.length
+              ? { sub_items: subItemsByItemId.get(line.itemId) }
+              : {}),
           });
         }
       }
