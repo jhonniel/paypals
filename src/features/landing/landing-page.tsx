@@ -2,6 +2,12 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import {
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
@@ -28,44 +34,179 @@ const fadeUp = {
   transition: { duration: 0.5, ease: [0.22, 1, 0.36, 1] as const },
 };
 
+const billFaceStyle: CSSProperties = {
+  backfaceVisibility: "hidden",
+  WebkitBackfaceVisibility: "hidden",
+};
+
 function SampleBill() {
+  const [dragging, setDragging] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startRotation: number;
+    width: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressTapRef = useRef(false);
+
+  function clampRotation(drag: NonNullable<typeof dragRef.current>, clientX: number) {
+    const delta = drag.startX - clientX;
+    return Math.max(
+      drag.startRotation - 180,
+      Math.min(drag.startRotation + 180, drag.startRotation + (delta / drag.width) * 180)
+    );
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startRotation: rotation,
+      width: Math.max(event.currentTarget.getBoundingClientRect().width, 1),
+      moved: false,
+    };
+    setDragging(true);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (Math.abs(drag.startX - event.clientX) > 6) drag.moved = true;
+    setRotation(clampRotation(drag, event.clientX));
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (drag.moved) {
+      suppressTapRef.current = true;
+      window.setTimeout(() => {
+        suppressTapRef.current = false;
+      }, 50);
+      setRotation(Math.round(clampRotation(drag, event.clientX) / 180) * 180);
+    } else if (!suppressTapRef.current) {
+      setRotation((r) => r + 180);
+    }
+
+    dragRef.current = null;
+    setDragging(false);
+  }
+
   return (
-    <div className="landing-receipt w-full max-w-sm rounded-2xl border border-border px-6 py-6 sm:px-7 sm:py-7">
-      <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-            Sample split
-          </p>
-          <p className="mt-1 font-[family-name:var(--font-display)] text-2xl tracking-tight">
-            Weekend brunch
-          </p>
-        </div>
-        <p className="text-sm font-semibold tabular-nums text-primary">₱2,180</p>
-      </div>
-      <ul className="mt-4 space-y-3 text-sm">
-        {[
-          ["Pancake stack", "You", "₱420"],
-          ["Matcha latte ×2", "You · Friend", "₱360"],
-          ["Family platter", "Shared ×4", "₱980"],
-          ["Service + tip", "Pro‑rata", "₱420"],
-        ].map(([item, who, amt]) => (
-          <li key={item} className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-medium">{item}</p>
-              <p className="text-xs text-muted-foreground">{who}</p>
+    <div
+      className="w-full max-w-sm"
+      style={{ perspective: "1100px" } as CSSProperties}
+    >
+      <div
+        className="tile-float relative"
+        style={
+          { animationPlayState: dragging ? "paused" : "running" } as CSSProperties
+        }
+      >
+        <div
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          className={`relative select-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
+          style={
+            {
+              transform: `rotateY(${rotation}deg)`,
+              transformStyle: "preserve-3d",
+              WebkitTransformStyle: "preserve-3d",
+              transition: dragging
+                ? "none"
+                : "transform 500ms cubic-bezier(0.22, 1, 0.36, 1)",
+              touchAction: "none",
+            } as CSSProperties
+          }
+        >
+          {/* Front — the bill */}
+          <div
+            className="landing-receipt w-full rounded-2xl border border-border px-6 py-6 sm:px-7 sm:py-7"
+            style={billFaceStyle}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  Sample split
+                </p>
+                <p className="mt-1 font-[family-name:var(--font-display)] text-2xl tracking-tight">
+                  Weekend brunch
+                </p>
+              </div>
+              <p className="text-sm font-semibold tabular-nums text-primary">₱2,180</p>
             </div>
-            <span className="shrink-0 tabular-nums text-muted-foreground">{amt}</span>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-5 space-y-2 border-t border-border pt-4 text-sm">
-        <div className="flex justify-between text-muted-foreground">
-          <span>Your total</span>
-          <span className="tabular-nums">₱745</span>
-        </div>
-        <div className="flex justify-between font-semibold">
-          <span>Ready to settle</span>
-          <span className="tabular-nums text-primary">₱745</span>
+            <ul className="mt-4 space-y-3 text-sm">
+              {[
+                ["Pancake stack", "You", "₱420"],
+                ["Matcha latte ×2", "You · Friend", "₱360"],
+                ["Family platter", "Shared ×4", "₱980"],
+                ["Service + tip", "Pro‑rata", "₱420"],
+              ].map(([item, who, amt]) => (
+                <li key={item} className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium">{item}</p>
+                    <p className="text-xs text-muted-foreground">{who}</p>
+                  </div>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{amt}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 space-y-2 border-t border-border pt-4 text-sm">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Your total</span>
+                <span className="tabular-nums">₱745</span>
+              </div>
+              <div className="flex justify-between font-semibold">
+                <span>Ready to settle</span>
+                <span className="tabular-nums text-primary">₱745</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Back — who pays what */}
+          <div
+            className="landing-receipt absolute inset-0 flex flex-col rounded-2xl border border-border px-6 py-6 sm:px-7 sm:py-7"
+            style={{ ...billFaceStyle, transform: "rotateY(180deg)" }}
+          >
+            <div className="border-b border-border pb-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                Who pays what
+              </p>
+              <p className="mt-1 font-[family-name:var(--font-display)] text-2xl tracking-tight">
+                Settled in seconds
+              </p>
+            </div>
+            <ul className="mt-4 flex-1 space-y-3 text-sm">
+              {[
+                ["You", "Pancakes · latte · platter share", "₱745"],
+                ["Mia", "Latte · platter share", "₱480"],
+                ["Leo", "Platter share", "₱480"],
+                ["Kai", "Platter share + tip", "₱475"],
+              ].map(([who, detail, amt]) => (
+                <li key={who} className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium">{who}</p>
+                    <p className="text-xs text-muted-foreground">{detail}</p>
+                  </div>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{amt}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-between border-t border-border pt-4 text-sm font-semibold">
+              <span>Everyone settled</span>
+              <span className="tabular-nums text-primary">₱2,180</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -110,25 +251,25 @@ export function LandingPage() {
       {/* Hero */}
       <section className="landing-hero-atmosphere relative min-h-[100dvh] overflow-hidden">
         <div className="landing-grid pointer-events-none absolute inset-0 opacity-60" />
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-[55dvh] w-full lg:inset-y-0 lg:left-auto lg:right-0 lg:h-auto lg:w-1/2">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[48dvh] w-full opacity-45 lg:inset-y-0 lg:left-auto lg:right-0 lg:h-auto lg:w-1/2 lg:opacity-100">
           <HeroScene />
         </div>
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-background/20 via-transparent to-background lg:bg-gradient-to-r lg:from-background lg:via-background/85 lg:to-transparent" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-background/40 via-background/80 to-background lg:bg-gradient-to-r lg:from-background lg:via-background/85 lg:to-transparent" />
 
-        <div className="relative z-10 mx-auto grid min-h-[100dvh] max-w-6xl items-center gap-10 px-4 pb-16 pt-28 sm:px-6 md:px-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-8 lg:pb-20 lg:pt-24">
+        <div className="relative z-10 mx-auto grid min-h-[100dvh] max-w-6xl items-center gap-8 px-4 pb-10 pt-20 sm:gap-10 sm:px-6 sm:pb-16 sm:pt-28 md:px-8 lg:grid-cols-[1.05fr_0.95fr] lg:gap-8 lg:pb-20 lg:pt-24">
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
             className="max-w-xl"
           >
-            <p className="font-[family-name:var(--font-display)] text-[clamp(3rem,11vw,4.75rem)] leading-[0.92] tracking-tight">
+            <p className="font-[family-name:var(--font-display)] text-[clamp(3rem,11vw,4.75rem)] leading-[0.92] tracking-tight text-foreground [text-shadow:0_2px_24px_rgba(0,0,0,0.55)]">
               Paypals
             </p>
-            <h1 className="mt-5 text-2xl font-semibold tracking-tight sm:text-3xl">
+            <h1 className="mt-5 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl [text-shadow:0_2px_18px_rgba(0,0,0,0.5)]">
               Split every receipt — fairly, fast, in pesos.
             </h1>
-            <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">
+            <p className="mt-4 text-base leading-relaxed text-foreground/90 sm:text-lg [text-shadow:0_1px_14px_rgba(0,0,0,0.55)]">
               Scan a bill, assign what everyone ordered, and settle the total without
               spreadsheets, group chats, or awkward calculations.
             </p>
@@ -142,7 +283,7 @@ export function LandingPage() {
                 <Link href="/login">Sign in</Link>
               </Button>
             </div>
-            <p className="mt-4 text-xs text-muted-foreground sm:text-sm">
+            <p className="mt-4 text-xs text-foreground/70 sm:text-sm">
               Invite-only access · Works with camera, PDF, and HEIC · Default currency PHP
             </p>
           </motion.div>
@@ -151,7 +292,7 @@ export function LandingPage() {
             initial={{ opacity: 0, y: 28 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.75, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
-            className="relative flex justify-center lg:justify-end"
+            className="relative flex justify-center pb-6 lg:justify-end lg:pb-0"
           >
             <div className="absolute -inset-10 -z-10 rounded-full bg-primary/15 blur-3xl" />
             <SampleBill />
