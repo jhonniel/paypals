@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   LayoutDashboard,
   Receipt,
@@ -14,6 +16,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import type { Profile } from "@/types/database";
+import {
+  NavDrawIcon,
+  navEase,
+  navItemVariants,
+  navListVariants,
+} from "@/components/layout/nav-draw-icon";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -32,9 +40,16 @@ export function AppSidebar({
   profile?: Profile | null;
 }) {
   const pathname = usePathname();
+  const reduceMotion = useReducedMotion();
+  const [boot, setBoot] = useState(true);
   const items = profile?.is_admin
     ? [...nav, { href: "/admin", label: "Admin", icon: Shield }]
     : nav;
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setBoot(false), 1500);
+    return () => window.clearTimeout(t);
+  }, []);
 
   return (
     <aside className="flex h-full w-full flex-col bg-sidebar px-3 py-4 backdrop-blur-xl lg:border-r lg:border-border lg:py-5">
@@ -46,37 +61,93 @@ export function AppSidebar({
         Paypals
       </Link>
 
-      <Link
-        href="/receipts/new"
-        onClick={onNavigate}
-        className="mb-6 flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2.5 text-sm font-medium text-primary-foreground shadow-lg shadow-[var(--glow)] transition hover:brightness-110"
+      <motion.div
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45, ease: navEase }}
       >
-        <Upload className="h-4 w-4" />
-        Upload receipt
-      </Link>
+        <Link
+          href="/receipts/new"
+          onClick={onNavigate}
+          className="mb-6 flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2.5 text-sm font-medium text-primary-foreground shadow-lg shadow-[var(--glow)] transition hover:brightness-110"
+        >
+          <NavDrawIcon
+            icon={Upload}
+            size={16}
+            strokeWidth={2.25}
+            draw={boot || pathname.startsWith("/receipts/new")}
+            drawKey={
+              boot
+                ? "upload-boot"
+                : pathname.startsWith("/receipts/new")
+                  ? "upload-active"
+                  : "upload-idle"
+            }
+          />
+          Upload receipt
+        </Link>
+      </motion.div>
 
-      <nav className="flex flex-1 flex-col gap-1">
+      <motion.nav
+        className="flex flex-1 flex-col gap-1"
+        variants={reduceMotion ? undefined : navListVariants}
+        initial={reduceMotion ? false : "hidden"}
+        animate="show"
+      >
         {items.map((item) => {
           const active =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const shouldDraw = boot || active;
+          const drawKey = boot
+            ? `${item.href}-boot`
+            : active
+              ? `${item.href}-active`
+              : `${item.href}-idle`;
+
           return (
-            <Link
+            <motion.div
               key={item.href}
-              href={item.href}
-              onClick={onNavigate}
-              className={cn(
-                "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
-                active
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-              )}
+              variants={reduceMotion ? undefined : navItemVariants}
+              whileHover={
+                reduceMotion
+                  ? undefined
+                  : {
+                      x: 2,
+                      transition: { duration: 0.22, ease: navEase },
+                    }
+              }
+              whileTap={
+                reduceMotion
+                  ? undefined
+                  : {
+                      scale: 0.98,
+                      transition: { duration: 0.14, ease: navEase },
+                    }
+              }
             >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
+              <Link
+                href={item.href}
+                onClick={onNavigate}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors duration-300",
+                  active
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                )}
+              >
+                <NavDrawIcon
+                  icon={item.icon}
+                  size={16}
+                  strokeWidth={active ? 2.35 : 2}
+                  draw={shouldDraw}
+                  drawKey={drawKey}
+                />
+                {item.label}
+              </Link>
+            </motion.div>
           );
         })}
-      </nav>
+      </motion.nav>
     </aside>
   );
 }

@@ -328,39 +328,47 @@ export function AdminPanelView() {
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-3 gap-3">
         {[
           { label: "Users", value: String(data.counts.users), icon: Users },
           { label: "Receipts", value: String(data.counts.receipts), icon: Receipt },
           { label: "Groups", value: String(data.counts.groups), icon: Activity },
-          {
-            label: "Total receipt spend",
-            value: formatPHP(
-              data.counts.totalSpend ?? 0,
-              data.counts.currency ?? "PHP"
-            ),
-            icon: TrendingUp,
-          },
         ].map((s) => (
           <Card key={s.label}>
-            <CardContent className="flex items-center gap-3 p-4">
-              <s.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">{s.label}</p>
-                <p className="truncate text-xl font-semibold tabular-nums">
-                  {s.value}
+            <CardContent className="space-y-1 p-3 sm:p-4">
+              <div className="flex items-center gap-1.5">
+                <s.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <p className="truncate text-[11px] text-muted-foreground sm:text-xs">
+                  {s.label}
                 </p>
               </div>
+              <p className="truncate text-lg font-semibold tabular-nums sm:text-xl">
+                {s.value}
+              </p>
             </CardContent>
           </Card>
         ))}
+        <Card className="col-span-3">
+          <CardContent className="space-y-1 p-4">
+            <div className="flex items-center gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">Total receipt spend</p>
+            </div>
+            <p className="truncate text-xl font-semibold tabular-nums">
+              {formatPHP(
+                data.counts.totalSpend ?? 0,
+                data.counts.currency ?? "PHP"
+              )}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>System health</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+        <CardContent className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
           <HealthPill label="Database" ok={data.health.database} />
           <HealthPill label="Service role" ok={data.health.serviceRole} />
           <HealthPill label="OCR keys" ok={data.health.ocrConfigured} />

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
@@ -11,6 +12,12 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
+import {
+  NavDrawIcon,
+  navEase,
+  navItemVariants,
+  navListVariants,
+} from "@/components/layout/nav-draw-icon";
 
 const items = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -20,85 +27,15 @@ const items = [
   { href: "/friends", label: "Friends", icon: UserPlus },
 ];
 
-/** Ease-out expo — assemble / reveal */
-const ease = [0.16, 1, 0.3, 1] as const;
-
-const dockList = {
-  hidden: {},
-  show: {
-    transition: { staggerChildren: 0.06, delayChildren: 0.04 },
-  },
-};
-
-const dockSlot = {
-  hidden: { opacity: 0, y: 18 },
-  show: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.52, ease },
-  },
-};
-
-const assemble = {
-  hidden: {},
-  show: {
-    transition: { staggerChildren: 0.09, delayChildren: 0.03 },
-  },
-};
-
-const piece = {
-  hidden: { opacity: 0, y: 12, scale: 0.86 },
-  show: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: { duration: 0.42, ease },
-  },
-};
-
-function TabContent({
-  label,
-  icon: Icon,
-  active,
-  assembleReveal,
-}: {
-  label: string;
-  icon: (typeof items)[number]["icon"];
-  active: boolean;
-  assembleReveal: boolean;
-}) {
-  const reduceMotion = useReducedMotion();
-
-  if (!assembleReveal || reduceMotion) {
-    return (
-      <span className="flex flex-col items-center gap-0.5">
-        <Icon className="h-5 w-5" strokeWidth={active ? 2.35 : 2} />
-        <span>{label}</span>
-      </span>
-    );
-  }
-
-  return (
-    <motion.span
-      key={`${label}-assemble`}
-      className="flex flex-col items-center gap-0.5"
-      variants={assemble}
-      initial="hidden"
-      animate="show"
-    >
-      <motion.span variants={piece} className="inline-flex" aria-hidden>
-        <Icon className="h-5 w-5" strokeWidth={active ? 2.35 : 2} />
-      </motion.span>
-      <motion.span variants={piece} className="block">
-        {label}
-      </motion.span>
-    </motion.span>
-  );
-}
-
 export function MobileBottomNav() {
   const pathname = usePathname();
   const reduceMotion = useReducedMotion();
+  const [boot, setBoot] = useState(true);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setBoot(false), 1400);
+    return () => window.clearTimeout(t);
+  }, []);
 
   return (
     <nav
@@ -107,7 +44,7 @@ export function MobileBottomNav() {
     >
       <motion.ul
         className="mx-auto flex max-w-lg items-end justify-between gap-1"
-        variants={reduceMotion ? undefined : dockList}
+        variants={reduceMotion ? undefined : navListVariants}
         initial={reduceMotion ? false : "hidden"}
         animate="show"
       >
@@ -118,12 +55,19 @@ export function MobileBottomNav() {
               item.href !== "/receipts/new" &&
               pathname.startsWith(item.href));
 
+          const shouldDraw = boot || active;
+          const drawKey = boot
+            ? `${item.href}-boot`
+            : active
+              ? `${item.href}-active`
+              : `${item.href}-idle`;
+
           if (item.primary) {
             return (
               <motion.li
                 key={item.href}
                 className="-mt-5"
-                variants={reduceMotion ? undefined : dockSlot}
+                variants={reduceMotion ? undefined : navItemVariants}
               >
                 <motion.div
                   whileTap={
@@ -131,7 +75,15 @@ export function MobileBottomNav() {
                       ? undefined
                       : {
                           scale: 0.96,
-                          transition: { duration: 0.15, ease },
+                          transition: { duration: 0.16, ease: navEase },
+                        }
+                  }
+                  whileHover={
+                    reduceMotion
+                      ? undefined
+                      : {
+                          scale: 1.03,
+                          transition: { duration: 0.22, ease: navEase },
                         }
                   }
                 >
@@ -140,21 +92,13 @@ export function MobileBottomNav() {
                     className="flex h-14 w-14 flex-col items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-[var(--glow)]"
                     aria-label={item.label}
                   >
-                    {reduceMotion ? (
-                      <item.icon className="h-5 w-5" strokeWidth={2.25} />
-                    ) : (
-                      <motion.span
-                        key={active ? "scan-on" : "scan"}
-                        variants={assemble}
-                        initial="hidden"
-                        animate="show"
-                        className="inline-flex"
-                      >
-                        <motion.span variants={piece} className="inline-flex">
-                          <item.icon className="h-5 w-5" strokeWidth={2.25} />
-                        </motion.span>
-                      </motion.span>
-                    )}
+                    <NavDrawIcon
+                      icon={item.icon}
+                      size={20}
+                      strokeWidth={2.25}
+                      draw={shouldDraw}
+                      drawKey={drawKey}
+                    />
                   </Link>
                 </motion.div>
               </motion.li>
@@ -165,7 +109,7 @@ export function MobileBottomNav() {
             <motion.li
               key={item.href}
               className="relative flex-1"
-              variants={reduceMotion ? undefined : dockSlot}
+              variants={reduceMotion ? undefined : navItemVariants}
             >
               <motion.div
                 whileTap={
@@ -173,25 +117,27 @@ export function MobileBottomNav() {
                     ? undefined
                     : {
                         scale: 0.97,
-                        transition: { duration: 0.15, ease },
+                        transition: { duration: 0.16, ease: navEase },
                       }
                 }
               >
                 <Link
                   href={item.href}
                   className={cn(
-                    "relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[10px] font-medium",
+                    "relative flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[10px] font-medium transition-colors duration-300",
                     active
                       ? "text-primary"
-                      : "text-muted-foreground"
+                      : "text-muted-foreground hover:text-foreground"
                   )}
                 >
-                  <TabContent
-                    label={item.label}
+                  <NavDrawIcon
                     icon={item.icon}
-                    active={active}
-                    assembleReveal={active}
+                    size={20}
+                    strokeWidth={active ? 2.35 : 2}
+                    draw={shouldDraw}
+                    drawKey={drawKey}
                   />
+                  <span>{item.label}</span>
                 </Link>
               </motion.div>
             </motion.li>
