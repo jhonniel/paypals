@@ -30,7 +30,20 @@ export async function readApiJson<T = unknown>(
     }
     return { ok: true, status, data: json };
   } catch {
-    const preview = trimmed.slice(0, 80);
+    const preview = trimmed.slice(0, 120);
+    if (
+      status === 413 ||
+      /payload.?too.?large|entity.?too.?large|FUNCTION_PAYLOAD_TOO_LARGE/i.test(
+        trimmed
+      )
+    ) {
+      return {
+        ok: false,
+        status: status || 413,
+        message:
+          "Upload too large for the server. Photos are compressed automatically — try again or use a smaller image.",
+      };
+    }
     if (/^internal server error$/i.test(trimmed)) {
       return {
         ok: false,

@@ -18,6 +18,7 @@ import {
   navItemVariants,
   navListVariants,
 } from "@/components/layout/nav-draw-icon";
+import { useMobileKeyboardOpen } from "@/hooks/use-mobile-keyboard";
 
 const items = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
@@ -31,6 +32,7 @@ export function MobileBottomNav() {
   const pathname = usePathname();
   const reduceMotion = useReducedMotion();
   const [boot, setBoot] = useState(true);
+  const keyboardOpen = useMobileKeyboardOpen();
 
   useEffect(() => {
     const t = window.setTimeout(() => setBoot(false), 1400);
@@ -39,8 +41,14 @@ export function MobileBottomNav() {
 
   return (
     <nav
-      className="relative z-40 shrink-0 border-t border-border bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-xl lg:hidden"
+      className={cn(
+        "relative z-40 shrink-0 overflow-hidden border-t border-border bg-background/95 backdrop-blur-xl transition-[max-height,opacity,padding,border-color] duration-200 ease-out lg:hidden",
+        keyboardOpen
+          ? "pointer-events-none max-h-0 border-transparent opacity-0 py-0"
+          : "max-h-28 opacity-100 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2"
+      )}
       aria-label="Primary"
+      aria-hidden={keyboardOpen}
     >
       <motion.ul
         className="mx-auto flex max-w-lg items-end justify-between gap-1"

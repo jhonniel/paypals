@@ -9,6 +9,7 @@ import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
 import type { Profile } from "@/types/database";
+import { useMobileKeyboardOpen } from "@/hooks/use-mobile-keyboard";
 
 export function AppShell({
   profile,
@@ -19,6 +20,7 @@ export function AppShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const keyboardOpen = useMobileKeyboardOpen();
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -33,6 +35,11 @@ export function AppShell({
       window.removeEventListener("keydown", onKey);
     };
   }, [mobileOpen]);
+
+  // Close the slide-out menu when the keyboard opens
+  useEffect(() => {
+    if (keyboardOpen) setMobileOpen(false);
+  }, [keyboardOpen]);
 
   return (
     <div className="flex h-dvh max-h-dvh overflow-hidden bg-background">

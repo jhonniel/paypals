@@ -21,7 +21,7 @@ const ALLOWED = new Set([
   "application/pdf",
 ]);
 
-const MAX_BYTES = 12 * 1024 * 1024; // 12MB
+const MAX_BYTES = 4 * 1024 * 1024; // ~4MB — under Vercel serverless body limit
 
 function normalizeMime(mime: string, name: string): string {
   const lower = (mime || "").toLowerCase();
@@ -87,7 +87,10 @@ export async function POST(request: Request) {
       return fail(`Unsupported file type: ${file.type || mime || "unknown"}`);
     }
     if (file.size > MAX_BYTES) {
-      return fail("File too large (max 12MB)");
+      return fail(
+        "File too large after compression (max ~4MB). Try a smaller photo or PDF.",
+        413
+      );
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());

@@ -14,6 +14,17 @@ const TIP_RE = /(?:tip|gratuity)/i;
 const DISCOUNT_RE = /(?:discount|promo|sc\/pwd|pwd|senior)/i;
 const SERVICE_RE = /(?:service\s*charge|\bsvc\b|delivery\s*charge)/i;
 
+/** Currency marks OCR often pastes into item names (₱, PHP, P, $, etc.) */
+const CURRENCY_TOKEN_RE =
+  /(?:^|[\s:])(?:php|phd|ph|₱|p\s*(?=\d)|usd|us\$|\$|€|£|¥|₩|₹)(?=[\s:]|$)/gi;
+const CURRENCY_PREFIX_RE =
+  /^(?:php|phd|ph|₱|p|usd|us\$|\$|€|£|¥|₩|₹)[\s.:]*/i;
+const CURRENCY_SUFFIX_RE =
+  /[\s.:]*(?:php|phd|ph|₱|p|usd|us\$|\$|€|£|¥|₩|₹)\s*$/i;
+/** Standalone currency / amount-only noise lines */
+const CURRENCY_ONLY_RE =
+  /^(?:php|phd|ph|₱|p|usd|us\$|\$|€|£|¥|₩|₹)(?:\s*[\d,]+\.?\d*)?$/i;
+
 /** Lines that are never menu items or should be ignored as noise. */
 const SKIP_RE =
   /^(?:owned\s*by|vat\s*reg|tin:?|min:|serial|sales\s*invoice|invoice|description|amount|table:|pax:|si#|trans#|cashier|terminal|thank|change|cash|card|gcash|paymaya|maya|vatable|vat\s*exempt|zero\s*rated|other\s*tax|customer\s*info|name$|address$|ref|bir|tel|phone|www\.|http|l-\d|bldg|avenue|barangay|district|poblacion|ground\s*floor|delivery\s*address|contact\s*number|your\s*chowking|order\s*history)/i;
@@ -22,18 +33,45 @@ const DATE_RE =
   /(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})|(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/;
 const TIME_RE = /(\d{1,2}:\d{2}(?::\d{2})?)/;
 
-/** `1 x 225.00` or `1 X 225.00  225.00` or `x 220.00  220.00` */
+/** `1 x 225.00` or `1 X ₱225.00  225.00` or `x 220.00  220.00` */
 const QTY_PRICE_RE =
-  /^(\d+)?\s*[x×]\s*([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?\s*$/i;
+  /^(\d+)?\s*[x×]\s*(?:php|₱|p|\$)?\s*([\d,]+\.\d{2})(?:\s+(?:php|₱|p|\$)?\s*([\d,]+\.\d{2}))?\s*$/i;
 
 const MODIFIER_RE = /^[\-–—•*·]/;
 const SIZE_OR_OPTION_RE =
   /^(?:regular|large|medium|small|tall|grande|venti|short|solo|family|upsized?|extra|less|no)\b/i;
 
+/** Money amount, optionally wrapped in currency marks */
+const MONEY_RE = /(?:php|₱|p|\$)?\s*([\d,]+\.\d{2})\s*(?:php|₱|p|\$)?/gi;
+
 function parseMoney(raw: string): number | null {
-  const m = raw.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/);
+  const m = raw
+    .replace(/,/g, "")
+    .replace(/[₱$€£¥₩₹]/g, "")
+    .replace(/\b(?:php|phd|usd|us)\b/gi, "")
+    .match(/(\d+(?:\.\d{1,2})?)/);
   if (!m) return null;
   return moneyNumber(m[1]);
+}
+
+/** Strip currency symbols so they never become item names / text fields. */
+export function stripCurrencyMarks(text: string): string {
+  return text
+    .replace(/[₱$€£¥₩₹]/g, " ")
+    .replace(/\b(?:php|phd|usd|us\$)\b/gi, " ")
+    .replace(/\bP(?=\s*[\d,])/g, " ") // P138 → 138
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function cleanItemName(raw: string): string {
+  let name = stripCurrencyMarks(raw);
+  name = name.replace(CURRENCY_PREFIX_RE, "").replace(CURRENCY_SUFFIX_RE, "");
+  name = name.replace(CURRENCY_TOKEN_RE, " ");
+  name = name.replace(/^[\d.]+\s+/, "");
+  name = name.replace(/[.\-–—:]+$/g, "").trim();
+  name = name.replace(/\s+/g, " ").trim();
+  return name.slice(0, 120);
 }
 
 function normalizeLine(line: string): string {
@@ -41,12 +79,16 @@ function normalizeLine(line: string): string {
     .replace(/\t+/g, " ")
     .replace(/\s+/g, " ")
     .replace(/(\d),(\d{2})\b/g, "$1.$2") // 240,00 → 240.00
+    .replace(/[₱$€£¥₩₹]/g, " ") // keep amounts, drop symbols
+    .replace(/\b(?:php|phd|usd)\b/gi, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function isSkipLine(line: string): boolean {
   if (!line || line.length < 2) return true;
   if (/^[\-=_]{3,}$/.test(line)) return true;
+  if (CURRENCY_ONLY_RE.test(line)) return true;
   if (SKIP_RE.test(line)) return true;
   if (/^vat\s*reg/i.test(line)) return true;
   return false;
@@ -66,8 +108,11 @@ function isSummaryLabel(line: string): boolean {
 function looksLikeItemName(line: string): boolean {
   if (isSkipLine(line) || isSummaryLabel(line) || MODIFIER_RE.test(line)) return false;
   if (QTY_PRICE_RE.test(line)) return false;
+  if (CURRENCY_ONLY_RE.test(line)) return false;
   if (DATE_RE.test(line) && line.length < 30) return false;
   if (!/[a-zA-Z]{3,}/.test(line)) return false;
+  // Pure money / currency leftovers are not item names
+  if (!/[a-zA-Z]{3,}/.test(stripCurrencyMarks(line))) return false;
   if (line.length > 100) return false;
   return true;
 }
@@ -91,8 +136,9 @@ function extractQtyPrice(line: string): {
 type OcrSub = NonNullable<OcrLineItem["subItems"]>[number];
 
 function pushSubItem(subs: OcrSub[], name: string, amount: number | null) {
-  const cleaned = name.replace(/^[\-–—•*·]+\s*/, "").trim().slice(0, 120);
-  if (!cleaned) return;
+  const cleaned = cleanItemName(name.replace(/^[\-–—•*·]+\s*/, ""));
+  if (!cleaned || cleaned.length < 2) return;
+  if (CURRENCY_ONLY_RE.test(cleaned)) return;
 
   // Nest size/option under the previous component (Pepsi Black → Regular)
   if (SIZE_OR_OPTION_RE.test(cleaned) && subs.length > 0) {
@@ -221,7 +267,7 @@ function extractPosItems(lines: string[]): OcrLineItem[] {
     for (let u = i; u <= consumedThrough; u++) used.add(u);
 
     items.push({
-      name: name.replace(/^[\d.]+\s+/, "").slice(0, 120),
+      name: cleanItemName(name),
       quantity: qty.quantity,
       unitPrice: qty.unitPrice,
       totalPrice: qty.totalPrice,
@@ -229,7 +275,7 @@ function extractPosItems(lines: string[]): OcrLineItem[] {
     });
   }
 
-  return items;
+  return items.filter((i) => i.name.length >= 2);
 }
 
 /** Fallback: single-line "Item name 99.00" + following component lines */
@@ -244,18 +290,20 @@ function extractInlineItems(lines: string[]): OcrLineItem[] {
     if (extractQtyPrice(line)) continue;
     if (DATE_RE.test(line)) continue;
 
-    const moneyMatch = [...line.matchAll(/([\d,]+\.\d{2})/g)];
+    const moneyMatch = [...line.matchAll(MONEY_RE)];
     if (moneyMatch.length === 0) continue;
     const last = moneyMatch[moneyMatch.length - 1];
     const price = parseMoney(last[1]);
     if (price === null || price <= 0) continue;
 
-    let name = line.slice(0, last.index ?? 0).trim().replace(/[.\-–—:]+$/, "").trim();
+    let name = cleanItemName(
+      line.slice(0, last.index ?? 0).trim().replace(/[.\-–—:]+$/, "")
+    );
     let quantity = 1;
     const qtyMatch = name.match(/^(\d+(?:\.\d+)?)\s*[x×]\s*(.+)$/i);
     if (qtyMatch) {
       quantity = Number(qtyMatch[1]) || 1;
-      name = qtyMatch[2].trim();
+      name = cleanItemName(qtyMatch[2]);
     }
     if (!name || name.length < 3 || !/[a-zA-Z]{3,}/.test(name)) continue;
     if (isSkipLine(name) || isSummaryLabel(name)) continue;
@@ -264,7 +312,7 @@ function extractInlineItems(lines: string[]): OcrLineItem[] {
     for (let u = i; u <= consumedThrough; u++) used.add(u);
 
     items.push({
-      name: name.slice(0, 120),
+      name,
       quantity,
       unitPrice: quantity > 1 ? moneyNumber(d(price).div(quantity)) : price,
       totalPrice: price,
@@ -392,6 +440,24 @@ export function parseReceiptText(
   items = items.filter(
     (i) => !/vatable|vat\s*amount|exempt|zero\s*rated|other\s*tax|paymaya/i.test(i.name)
   );
+
+  // Final pass: never keep currency marks in names / empty currency leftovers
+  items = items
+    .map((i) => ({
+      ...i,
+      name: cleanItemName(i.name),
+      subItems: i.subItems
+        ?.map((s) => ({
+          ...s,
+          name: cleanItemName(s.name),
+          subItems: s.subItems?.map((n) => ({
+            ...n,
+            name: cleanItemName(n.name),
+          })),
+        }))
+        .filter((s) => s.name.length >= 2),
+    }))
+    .filter((i) => i.name.length >= 2);
 
   if (items.length === 0 && total !== null) {
     items.push({

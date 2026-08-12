@@ -19,6 +19,10 @@ import { Label } from "@/components/ui/label";
 import { ReceiptScanOverlay } from "@/components/receipt-scan-overlay";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
+import {
+  isPayloadTooLargeError,
+  prepareReceiptUpload,
+} from "@/lib/compress-receipt-image";
 
 const ACCEPT =
   "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
@@ -144,8 +148,9 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
       setScanning(true);
       try {
         const ready = await maybeConvertHeic(file);
+        const compressed = await prepareReceiptUpload(ready);
         const form = new FormData();
-        form.append("file", ready);
+        form.append("file", compressed);
         if (effectiveGroupId) form.append("group_id", effectiveGroupId);
 
         const res = await fetch("/api/upload", {
@@ -162,6 +167,11 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         }>(res);
 
         if (!parsed.ok) {
+          if (isPayloadTooLargeError(res.status, parsed.message)) {
+            throw new Error(
+              "Photo is too large for upload. We’ll compress the next try — or use a smaller image."
+            );
+          }
           throw new Error(parsed.message);
         }
 
@@ -391,8 +401,8 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           Drop a receipt here
         </h2>
         <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-          PNG, JPG, WEBP, HEIC, or PDF — up to 12MB. Paste from clipboard with ⌘V /
-          Ctrl+V.
+          PNG, JPG, WEBP, HEIC, or PDF. Photos are compressed automatically before
+          upload. Paste from clipboard with ⌘V / Ctrl+V.
         </p>
 
         <div className="mt-8 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
