@@ -137,7 +137,9 @@ export async function POST(request: Request) {
 
   let redeemed = false;
 
-  if (data.session && data.user) {
+  // Always redeem when we have a user — even if email confirm left no session yet.
+  // Service-role path does not need auth.uid().
+  if (data.user) {
     const result = await redeemSignupInviteForUser(
       supabase,
       inviteCode,
@@ -154,7 +156,9 @@ export async function POST(request: Request) {
             message:
               result.reason === "exhausted"
                 ? "This invite was already used — ask an admin for a new one."
-                : "Account was created but the invite could not be applied. Ask an admin for a fresh invite, then use Claim invite after signing in.",
+                : result.reason === "invalid" || result.reason === "not_found"
+                  ? "A valid admin invite code is required to create an account"
+                  : "Account was created but the invite could not be applied. Ask an admin for a fresh invite, then use Claim invite after signing in.",
           },
         },
         { status: 400 }

@@ -35,7 +35,7 @@ export function AppShell({
   }, [mobileOpen]);
 
   return (
-    <div className="flex min-h-dvh bg-background">
+    <div className="flex h-dvh max-h-dvh overflow-hidden bg-background">
       <div className="hidden lg:fixed lg:inset-y-0 lg:z-30 lg:flex lg:w-64 lg:flex-col">
         <AppSidebar profile={profile} />
       </div>
@@ -79,13 +79,17 @@ export function AppShell({
         </div>
       </div>
 
-      <div className="flex min-h-dvh w-full min-w-0 flex-1 flex-col lg:pl-64">
+      {/*
+        Mobile: shell fills the dynamic viewport; only <main> scrolls.
+        Keeps the dock pinned (Safari jumps fixed bottom bars when the URL bar hides).
+      */}
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col lg:pl-64">
         <AppTopbar
           profile={profile}
           onMenuClick={() => setMobileOpen(true)}
           onSearchClick={() => setCommandOpen(true)}
         />
-        <main className="min-w-0 flex-1 px-4 pb-28 pt-4 sm:px-6 sm:pt-6 md:px-8 md:py-8 lg:pb-8">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain px-4 pb-4 pt-4 sm:px-6 sm:pt-6 md:px-8 md:py-8 lg:pb-8">
           {children}
         </main>
         <MobileBottomNav />

@@ -175,12 +175,6 @@ export function LoginForm() {
         </Button>
       </form>
       <p className="text-center text-sm text-muted-foreground">
-        Prefer a passwordless login?{" "}
-        <Link href="/magic-link" className="text-primary hover:underline">
-          Magic link
-        </Link>
-      </p>
-      <p className="text-center text-sm text-muted-foreground">
         New to Paypals? Ask Ygay for an invite, then{" "}
         <Link href="/signup" className="text-primary hover:underline">
           create an account

@@ -317,3 +317,99 @@ canvas {
 .focus-ring:focus-visible {
   box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
 }
+
+/* Receipt OCR scan overlay */
+.receipt-scan-corner {
+  position: absolute;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-color: var(--primary);
+  opacity: 0.95;
+  animation: receipt-scan-pulse 1.8s ease-in-out infinite;
+}
+
+.receipt-scan-grid {
+  background-image:
+    linear-gradient(
+      color-mix(in oklab, var(--primary) 18%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--primary) 18%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 18px 18px;
+  mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent);
+}
+
+.receipt-scan-beam {
+  top: 0;
+  height: 28%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--primary) 18%, transparent) 45%,
+    color-mix(in oklab, var(--primary) 55%, transparent) 72%,
+    transparent
+  );
+  animation: receipt-scan-beam 2.1s ease-in-out infinite;
+}
+
+.receipt-scan-beam-core {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  bottom: 18%;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow:
+    0 0 10px var(--primary),
+    0 0 22px color-mix(in oklab, var(--primary) 70%, transparent);
+}
+
+@keyframes receipt-scan-beam {
+  0% {
+    transform: translateY(-10%);
+    opacity: 0.35;
+  }
+  15% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(260%);
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(360%);
+    opacity: 0.35;
+  }
+}
+
+@keyframes receipt-scan-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-scan-beam,
+  .receipt-scan-corner {
+    animation: none;
+  }
+
+  .receipt-scan-beam {
+    top: 42%;
+    opacity: 0.85;
+  }
+}

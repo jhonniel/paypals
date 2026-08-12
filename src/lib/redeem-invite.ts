@@ -6,40 +6,12 @@ type RedeemResult = {
   label?: string | null;
 };
 
-/**
- * Redeem a signup invite for a user.
- * Prefer the DB RPC; if it fails (e.g. boolean cast bug), fall back to service-role updates.
- */
-export async function redeemSignupInviteForUser(
-  supabase: SupabaseClient,
+async function redeemViaAdmin(
   inviteCode: string,
   userId: string
 ): Promise<RedeemResult> {
-  const code = inviteCode.trim();
-  if (code.length < 4) return { ok: false, reason: "missing" };
-
-  const { data, error } = await supabase.rpc("redeem_signup_invite", {
-    p_code: code,
-  });
-
-  if (!error) {
-    const r = data as { ok?: boolean; reason?: string; label?: string } | null;
-    if (r?.ok) return { ok: true, label: r.label ?? null };
-    // Fall through to admin path for soft failures (exhausted/invalid still fail there)
-    if (r?.reason === "exhausted" || r?.reason === "invalid" || r?.reason === "not_found") {
-      return { ok: false, reason: r.reason };
-    }
-  } else {
-    console.error("[redeem] rpc error", error.message);
-  }
-
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return {
-      ok: false,
-      reason: error?.message?.includes("boolean")
-        ? "rpc_boolean_bug"
-        : "rpc_failed",
-    };
+    return { ok: false, reason: "missing_service_role" };
   }
 
   try {
@@ -48,7 +20,7 @@ export async function redeemSignupInviteForUser(
 
     const { data: validation, error: validateError } = await admin.rpc(
       "validate_signup_invite",
-      { p_code: code }
+      { p_code: inviteCode }
     );
     if (validateError) {
       return { ok: false, reason: validateError.message };
@@ -115,4 +87,38 @@ export async function redeemSignupInviteForUser(
     console.error("[redeem] admin fallback failed", e);
     return { ok: false, reason: "admin_fallback_failed" };
   }
+}
+
+/**
+ * Redeem a signup invite for a user.
+ * Uses service-role when available (reliable even without a session / if RPC is buggy).
+ * Falls back to the DB RPC for environments without SUPABASE_SERVICE_ROLE_KEY.
+ */
+export async function redeemSignupInviteForUser(
+  supabase: SupabaseClient,
+  inviteCode: string,
+  userId: string
+): Promise<RedeemResult> {
+  const code = inviteCode.trim();
+  if (code.length < 4) return { ok: false, reason: "missing" };
+
+  if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return redeemViaAdmin(code, userId);
+  }
+
+  const { data, error } = await supabase.rpc("redeem_signup_invite", {
+    p_code: code,
+  });
+
+  if (!error) {
+    const r = data as { ok?: boolean; reason?: string; label?: string } | null;
+    if (r?.ok) return { ok: true, label: r.label ?? null };
+    return { ok: false, reason: r?.reason ?? "invalid" };
+  }
+
+  console.error("[redeem] rpc error", error.message);
+  return {
+    ok: false,
+    reason: error.message.includes("boolean") ? "rpc_boolean_bug" : "rpc_failed",
+  };
 }

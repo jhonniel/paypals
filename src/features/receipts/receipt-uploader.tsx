@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload,
   Camera,
@@ -17,6 +16,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { ReceiptScanOverlay } from "@/components/receipt-scan-overlay";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
 
@@ -376,37 +376,13 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         onDrop={onDrop}
         className={cn(
           "relative overflow-hidden rounded-3xl border-2 border-dashed px-4 py-12 text-center transition-all sm:px-8 sm:py-16",
+          scanning && "min-h-[28rem] sm:min-h-[32rem]",
           dragging
             ? "border-primary bg-accent/40"
             : "border-border bg-muted/20 hover:border-primary/40"
         )}
       >
-        <AnimatePresence>
-          {scanning && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm"
-            >
-              <div className="relative mb-4 h-24 w-40 overflow-hidden rounded-xl border border-border bg-card">
-                <motion.div
-                  className="absolute inset-x-0 h-0.5 bg-primary shadow-[0_0_12px_var(--primary)]"
-                  animate={{ top: ["8%", "90%", "8%"] }}
-                  transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-                />
-                {preview && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={preview} alt="" className="h-full w-full object-cover opacity-60" />
-                )}
-              </div>
-              <p className="flex items-center gap-2 text-sm font-medium">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                Scanning receipt…
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <ReceiptScanOverlay active={scanning} previewUrl={preview} />
 
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
           <Upload className="h-6 w-6" />

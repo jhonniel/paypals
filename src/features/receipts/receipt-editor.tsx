@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { computeReceiptTotals, formatPHP, lineTotal, moneyNumber } from "@/lib/money";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
+import { ReceiptScanOverlay } from "@/components/receipt-scan-overlay";
 import {
   normalizeSubItems,
   type ReceiptSubItem,
@@ -1108,7 +1109,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   {showEnhanced ? "Original" : "Enhance"}
                 </Button>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent className="relative p-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   key={showEnhanced ? "enhanced" : "original"}
@@ -1119,6 +1120,16 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   }
                   alt={showEnhanced ? "Enhanced receipt" : "Uploaded receipt"}
                   className="max-h-96 w-full object-contain bg-muted/30"
+                />
+                <ReceiptScanOverlay
+                  active={reocr}
+                  previewUrl={
+                    showEnhanced
+                      ? `/api/receipts/${receiptId}/enhance`
+                      : imageUrl
+                  }
+                  compact
+                  className="rounded-none bg-background/60"
                 />
               </CardContent>
             </Card>
