@@ -509,18 +509,34 @@ export function GroupDetailView({
 
   async function copyInvite() {
     if (!data) return;
-    await navigator.clipboard.writeText(data.invite_url);
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : publicEnv.appUrl;
+    const code = data.group.invite_code?.trim();
+    const url = code
+      ? `${origin.replace(/\/$/, "")}/invite/${encodeURIComponent(code)}`
+      : data.invite_url;
+    await navigator.clipboard.writeText(url);
     toast.success("Invite link copied");
   }
 
   async function copyGuestLink(token: string) {
-    const url = `${publicEnv.appUrl}/invite/guest/${token}`;
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : publicEnv.appUrl;
+    const url = `${origin.replace(/\/$/, "")}/invite/guest/${token}`;
     await navigator.clipboard.writeText(url);
     toast.success("Guest invite link copied");
   }
 
   async function emailGuest(email: string, token: string, name: string) {
-    const url = `${publicEnv.appUrl}/invite/guest/${token}`;
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : publicEnv.appUrl;
+    const url = `${origin.replace(/\/$/, "")}/invite/guest/${token}`;
     const subject = encodeURIComponent(`Join ${data?.group.name ?? "our group"} on Paypals`);
     const body = encodeURIComponent(
       `Hi ${name},\n\nYou're invited to split bills with us on Paypals.\n\nClaim your seat here:\n${url}\n\nAfter you join, tap the items you ordered so the split is fair.`
@@ -569,7 +585,11 @@ export function GroupDetailView({
       setInviteModalOpen(false);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
       if (json.data?.invite_token && guestEmail.trim()) {
-        const url = `${publicEnv.appUrl}/invite/guest/${json.data.invite_token}`;
+        const origin =
+          typeof window !== "undefined"
+            ? window.location.origin
+            : publicEnv.appUrl;
+        const url = `${origin.replace(/\/$/, "")}/invite/guest/${json.data.invite_token}`;
         await navigator.clipboard.writeText(url).catch(() => null);
         toast.message("Personal invite link copied");
       }

@@ -3,16 +3,21 @@ import { getAdminClient, writeAuditLog } from "@/lib/supabase/auth";
 import { ok, forbidden, fail, fromZod, serverError, created } from "@/lib/api";
 import { sendSignupInviteEmail } from "@/lib/email/notify";
 import { isSmtpConfigured } from "@/lib/email/smtp";
+import { getAppOrigin } from "@/lib/app-origin";
 import { signupInviteUrl } from "@/lib/signup-invite-url";
 
-function withInviteUrls<T extends { code: string }>(rows: T[]) {
+function withInviteUrls<T extends { code: string }>(
+  rows: T[],
+  request?: Request
+) {
+  const origin = getAppOrigin(request);
   return rows.map((row) => ({
     ...row,
-    invite_url: signupInviteUrl(row.code),
+    invite_url: signupInviteUrl(row.code, origin),
   }));
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const auth = await getAdminClient();
     if (!auth) return forbidden("Admin access required");
@@ -23,7 +28,7 @@ export async function GET() {
       .order("created_at", { ascending: false });
 
     if (error) return fail(error.message, 400);
-    return ok(withInviteUrls(data ?? []));
+    return ok(withInviteUrls(data ?? [], request));
   } catch (e) {
     console.error(e);
     return serverError();
@@ -113,7 +118,7 @@ export async function POST(request: Request) {
       return fail(error.message, 400);
     }
 
-    const createdRows = withInviteUrls(data ?? []);
+    const createdRows = withInviteUrls(data ?? [], request);
     await writeAuditLog(supabase, "create_signup_invite", "signup_invite", null, {
       count: createdRows.length,
       codes: createdRows.map((r) => r.code),
@@ -136,6 +141,7 @@ export async function POST(request: Request) {
           codes: createdRows.map((r) => r.code),
           label: parsed.data.label,
           fromName: adminProfile?.full_name || adminProfile?.email || "Paypals admin",
+          baseUrl: getAppOrigin(request),
         });
       }
     }

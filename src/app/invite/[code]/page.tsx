@@ -7,7 +7,8 @@ export default async function InvitePage({
 }: {
   params: Promise<{ code: string }>;
 }) {
-  const { code } = await params;
+  const { code: raw } = await params;
+  const code = decodeURIComponent(raw).trim();
   return (
     <div className="gradient-mesh relative flex min-h-dvh flex-col">
       <header className="flex items-center justify-between px-4 py-5 sm:px-6">

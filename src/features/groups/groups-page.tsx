@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import Link from "next/link";
@@ -97,6 +98,8 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
     moved: boolean;
   } | null>(null);
   const suppressTapRef = useRef(false);
+  const lastBackTapRef = useRef(0);
+  const handledDoubleTapRef = useRef(false);
 
   const owes = group.my_owes ?? 0;
   const currency = group.my_currency ?? "PHP";
@@ -112,6 +115,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
     if (nextFlipped !== flipped) setFlareKey((k) => k + 1);
     setFlipped(nextFlipped);
     setRotation(turn * 180);
+    if (!nextFlipped) lastBackTapRef.current = 0;
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -172,13 +176,39 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
         suppressTapRef.current = false;
       }, 50);
       snapTo(snappedRotation);
-    } else {
-      // Tap → flip
-      if (!suppressTapRef.current) snapTo(rotation + 180);
+    } else if (!suppressTapRef.current) {
+      if (!flipped) {
+        // Single tap/click → flip to items
+        snapTo(rotation + 180);
+      } else {
+        // Double tap/click → flip back to original
+        const now = Date.now();
+        if (now - lastBackTapRef.current < 350) {
+          lastBackTapRef.current = 0;
+          handledDoubleTapRef.current = true;
+          window.setTimeout(() => {
+            handledDoubleTapRef.current = false;
+          }, 400);
+          snapTo(rotation + 180);
+        } else {
+          lastBackTapRef.current = now;
+        }
+      }
     }
 
     dragRef.current = null;
     setDragging(false);
+  }
+
+  function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("a")) return;
+    // Already handled by the second click in onPointerUp.
+    if (handledDoubleTapRef.current) return;
+    if (!flipped) return;
+    event.preventDefault();
+    lastBackTapRef.current = 0;
+    snapTo(rotation + 180);
   }
 
   return (
@@ -204,6 +234,12 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onDoubleClick={onDoubleClick}
+        title={
+          flipped
+            ? "Double-tap or double-click to flip back"
+            : "Tap to view items"
+        }
         className={`relative h-full w-full select-none ${
           dragging ? "cursor-grabbing" : "cursor-grab"
         }`}
@@ -292,9 +328,14 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                 ))}
               </div>
             ) : (
-              <p className="mt-4 text-center text-xs text-muted-foreground">
-                No assigned items yet
-              </p>
+              <div className="mt-4 text-center">
+                <p className="text-xs text-muted-foreground">
+                  No assigned items yet
+                </p>
+                <p className="mt-2 text-[10px] text-muted-foreground/80">
+                  Double-tap to flip back
+                </p>
+              </div>
             )}
           </div>
 

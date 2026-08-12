@@ -21,10 +21,11 @@ import {
   type ItemSplitMode,
 } from "@/lib/splits";
 import { normalizeSubItems } from "@/lib/receipt-sub-items";
+import { groupInviteUrlFromRequest } from "@/lib/signup-invite-url";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_req: Request, { params }: Params) {
+export async function GET(req: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
@@ -585,7 +586,7 @@ export async function GET(_req: Request, { params }: Params) {
       )
     ).filter((row) => row.methods.length > 0);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = groupInviteUrlFromRequest(String(group.invite_code ?? ""), req);
 
     let payment_proofs: Array<{
       member_id: string;
@@ -645,7 +646,7 @@ export async function GET(_req: Request, { params }: Params) {
       pending_claim_receipts,
       must_claim_before_view:
         !isCreator && pending_claim_receipts.length > 0,
-      invite_url: `${appUrl}/invite/${group.invite_code}`,
+      invite_url: appUrl,
     });
   } catch (e) {
     console.error(e);

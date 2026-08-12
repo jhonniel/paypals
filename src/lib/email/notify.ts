@@ -1,12 +1,8 @@
-import { publicEnv } from "@/lib/env";
+import { getAppOrigin } from "@/lib/app-origin";
 import { inviteAdminEmail, sendEmail } from "@/lib/email/smtp";
 
 function appUrl() {
-  return (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    publicEnv.appUrl ||
-    "http://localhost:3000"
-  );
+  return getAppOrigin();
 }
 
 function escapeHtml(value: string) {
@@ -154,6 +150,8 @@ export async function sendSignupInviteEmail(opts: {
   codes: string[];
   label?: string | null;
   fromName?: string | null;
+  /** Public site origin used in links (request host preferred). */
+  baseUrl?: string | null;
 }) {
   const to = opts.to.trim().toLowerCase();
   const codes = opts.codes.filter(Boolean);
@@ -162,7 +160,9 @@ export async function sendSignupInviteEmail(opts: {
   }
 
   const { signupInviteUrl } = await import("@/lib/signup-invite-url");
-  const links = codes.map((c) => signupInviteUrl(c));
+  const { getAppOrigin } = await import("@/lib/app-origin");
+  const origin = (opts.baseUrl || getAppOrigin()).replace(/\/$/, "");
+  const links = codes.map((c) => signupInviteUrl(c, origin));
   const primaryLink = links[0];
 
   const subject =
