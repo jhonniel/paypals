@@ -55,6 +55,128 @@ function softName(name: string) {
   return trimmed;
 }
 
+function formatItemPickers(
+  item: ClaimItem,
+  excludeMemberId?: string | null
+) {
+  const pickers = (item.claims ?? []).filter(
+    (c) => !excludeMemberId || c.member_id !== excludeMemberId
+  );
+  if (pickers.length > 0) {
+    return pickers
+      .map((c) => (c.quantity > 1 ? `${c.name} ×${c.quantity}` : c.name))
+      .join(", ");
+  }
+  if ((item.claimed_by ?? []).length > 0) {
+    return item.claimed_by!.join(", ");
+  }
+  return null;
+}
+
+type TakenByUser = {
+  key: string;
+  name: string;
+  items: Array<{ id: string; label: string }>;
+};
+
+function groupClaimsByUser(
+  items: ClaimItem[],
+  excludeMemberId?: string | null
+): TakenByUser[] {
+  const byUser = new Map<string, TakenByUser>();
+
+  for (const item of items) {
+    const claims = (item.claims ?? []).filter(
+      (c) =>
+        c.quantity > 0 &&
+        (!excludeMemberId || c.member_id !== excludeMemberId)
+    );
+
+    if (claims.length > 0) {
+      for (const claim of claims) {
+        const existing = byUser.get(claim.member_id);
+        const label =
+          claim.quantity > 1
+            ? `${softName(item.name)} ×${claim.quantity}`
+            : softName(item.name);
+        const rowId = `${item.id}-${claim.member_id}`;
+        if (existing) {
+          if (!existing.items.some((row) => row.id === rowId)) {
+            existing.items.push({ id: rowId, label });
+          }
+        } else {
+          byUser.set(claim.member_id, {
+            key: claim.member_id,
+            name: claim.name,
+            items: [{ id: rowId, label }],
+          });
+        }
+      }
+      continue;
+    }
+
+    if (excludeMemberId) {
+      for (const name of item.claimed_by ?? []) {
+        const key = `name:${name}`;
+        const label = softName(item.name);
+        const rowId = `${item.id}-${key}`;
+        const existing = byUser.get(key);
+        if (existing) {
+          if (!existing.items.some((row) => row.id === rowId)) {
+            existing.items.push({ id: rowId, label });
+          }
+        } else {
+          byUser.set(key, {
+            key,
+            name,
+            items: [{ id: rowId, label }],
+          });
+        }
+      }
+    }
+  }
+
+  return [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Multi-unit / multi-share items — pickers show only when fully taken. */
+function itemHasMultiPool(item: ClaimItem) {
+  const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+  const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+  const qtyOnReceipt = Math.max(0, Number(item.quantity) || 0);
+  if (mode === "among_n" && splitN > 1) return true;
+  if (mode === "among_claimers" && qtyOnReceipt > 1) return true;
+  return false;
+}
+
+/** Claim pool size: N-way shares vs receipt line units. */
+function itemPoolSize(item: ClaimItem) {
+  const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
+  const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
+  const qtyOnReceipt = Math.max(0, Number(item.quantity) || 0);
+  if (mode === "among_n" && splitN > 1) return splitN;
+  return Math.max(qtyOnReceipt, 1);
+}
+
+function myClaimQty(item: ClaimItem, memberId?: string | null) {
+  if (!memberId) return 0;
+  const mine = item.claims?.find((c) => c.member_id === memberId);
+  return Math.max(0, Number(mine?.quantity) || 0);
+}
+
+function totalClaimedQty(item: ClaimItem) {
+  return (item.claims ?? []).reduce(
+    (sum, c) => sum + Math.max(0, Number(c.quantity) || 0),
+    0
+  );
+}
+
+function memberHasClaim(item: ClaimItem, memberId?: string | null) {
+  if (!memberId) return false;
+  if ((item.claimer_ids ?? []).includes(memberId)) return true;
+  return myClaimQty(item, memberId) > 0;
+}
+
 /**
  * Claim / re-pick items on receipt(s).
  * - gate: full-page blocker until first confirm
@@ -130,28 +252,31 @@ export function GroupClaimGate({
       }
 
       const claimers = item.claimer_ids ?? [];
-      const iClaimed = Boolean(claimMemberId && claimers.includes(claimMemberId));
+      const myQtyClaimed = myClaimQty(item, claimMemberId);
+      const iClaimed = memberHasClaim(item, claimMemberId);
       const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
       const multiWay = mode === "among_n" && splitN > 1;
-      const takenByOthers = (item.claims ?? [])
-        .filter((c) => !claimMemberId || c.member_id !== claimMemberId)
-        .reduce((sum, c) => sum + Math.max(0, Number(c.quantity) || 0), 0);
+      const itemQty = Math.max(0, Number(item.quantity) || 0);
+      const poolSize =
+        multiWay ? splitN : mode === "among_claimers" ? itemQty : itemQty;
+      const totalClaimed = totalClaimedQty(item);
+      const poolLeft = Math.max(0, poolSize - totalClaimed);
 
-      // Prefer shares/units still free for this member (excluding their own claim)
       let remaining: number;
       if (multiWay) {
-        remaining = Math.max(0, splitN - takenByOthers);
+        remaining = iClaimed
+          ? Math.max(poolLeft + myQtyClaimed, myQtyClaimed)
+          : poolLeft;
       } else if (mode === "among_claimers") {
-        const itemQty = Math.max(0, Number(item.quantity) || 0);
-        remaining =
-          item.remaining_quantity != null
-            ? Math.max(0, Number(item.remaining_quantity) + (iClaimed ? (item.claims?.find(c => c.member_id === claimMemberId)?.quantity ?? 0) : 0))
-            : Math.max(0, itemQty - takenByOthers);
-        // Simpler: units left for me = item qty - others
-        remaining = Math.max(0, itemQty - takenByOthers);
+        remaining = iClaimed
+          ? Math.max(poolLeft + myQtyClaimed, myQtyClaimed)
+          : poolLeft;
       } else {
         // One person: unavailable once anyone else claimed
-        remaining = claimers.length > 0 && !iClaimed ? 0 : Math.max(1, Number(item.quantity) || 1);
+        remaining =
+          claimers.length > 0 && !iClaimed
+            ? 0
+            : Math.max(1, itemQty || 1);
       }
 
       const hidden = isItemHiddenFromMember(
@@ -159,15 +284,11 @@ export function GroupClaimGate({
         item.split_n ?? 1,
         claimers,
         claimMemberId,
-        { remainingQuantity: remaining, itemQuantity: item.quantity }
+        { remainingQuantity: poolLeft, itemQuantity: item.quantity }
       );
 
-      // Fully taken by others → not on the pick list (easy to see what's left)
-      if (hidden && !iClaimed) {
-        taken.push(item);
-        continue;
-      }
-      if (remaining <= 0 && !iClaimed) {
+      // Fully taken by others → hidden from pick list
+      if ((hidden || poolLeft <= 0) && !iClaimed) {
         taken.push(item);
         continue;
       }
@@ -177,27 +298,38 @@ export function GroupClaimGate({
     return { availableItems: available, takenItems: taken };
   }, [current, claimMemberId]);
 
-  const progressLabel = `${Math.min(index + 1, receipts.length)} of ${receipts.length}`;
+  const takenByUser = useMemo(() => {
+    if (!current) return [];
+    const pickable = current.items.filter(
+      (item) => (item.split_mode ?? "among_n") !== "among_group"
+    );
+    return groupClaimsByUser(pickable, claimMemberId);
+  }, [current, claimMemberId]);
 
-  function sharesTakenByOthers(item: ClaimItem) {
-    const fromClaims = (item.claims ?? [])
-      .filter((c) => !claimMemberId || c.member_id !== claimMemberId)
-      .reduce((sum, c) => sum + Math.max(0, Number(c.quantity) || 0), 0);
-    if ((item.claims?.length ?? 0) > 0) return fromClaims;
-    return Math.max(0, Number(item.claimed_quantity ?? 0));
-  }
+  const othersPickCount = useMemo(
+    () => takenByUser.reduce((total, group) => total + group.items.length, 0),
+    [takenByUser]
+  );
+
+  const progressLabel = `${Math.min(index + 1, receipts.length)} of ${receipts.length}`;
 
   function maxForItem(item: ClaimItem) {
     const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
     const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
     const multiWay = mode === "among_n" && splitN > 1;
+    const itemQty = Math.max(0, Number(item.quantity) || 0);
+    const mine = myClaimQty(item, claimMemberId);
 
-    // Split N ways → remaining shares shrink as others claim (3 → 2 → 1 → 0)
     if (multiWay) {
-      return Math.max(0, splitN - sharesTakenByOthers(item));
+      const poolLeft = Math.max(0, splitN - totalClaimedQty(item));
+      return Math.max(poolLeft + mine, mine);
     }
 
-    const itemQty = Math.max(0, Number(item.quantity) || 0);
+    if (mode === "among_claimers") {
+      const poolLeft = Math.max(0, itemQty - totalClaimedQty(item));
+      return Math.max(poolLeft + mine, mine);
+    }
+
     const remaining =
       item.remaining_quantity != null
         ? Math.max(0, Number(item.remaining_quantity))
@@ -287,6 +419,7 @@ export function GroupClaimGate({
       );
 
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      await qc.invalidateQueries({ queryKey: ["groups"] });
 
       if (isModal && !assigningForOther) {
         onClose?.();
@@ -434,28 +567,32 @@ export function GroupClaimGate({
               const hint = itemSplitModeLabel(mode, item.split_n);
               const max = maxForItem(item);
               const qtyOnReceipt = Number(item.quantity);
+              const poolSize = itemPoolSize(item);
+              const poolLeft = Math.max(0, poolSize - totalClaimedQty(item));
               const multiWay = mode === "among_n" && splitN > 1;
-              const sharesLeft = multiWay ? max : null;
-              const remaining = multiWay
-                ? max
-                : (item.remaining_quantity ?? Math.max(0, Number(item.quantity)));
               const metaParts: string[] = [];
               if (!isOnePerson) metaParts.push(hint);
-              if (qtyOnReceipt > 1 && !multiWay) {
-                metaParts.push(`${qtyOnReceipt} on receipt`);
-              }
-              if (multiWay && sharesLeft != null && sharesLeft < splitN) {
+              if (multiWay) {
                 metaParts.push(
-                  `${sharesLeft} of ${splitN} share${splitN === 1 ? "" : "s"} left`
+                  `${poolLeft} of ${poolSize} share${poolSize === 1 ? "" : "s"} left`
                 );
-              } else if (!multiWay && remaining < qtyOnReceipt) {
-                metaParts.push(`${remaining} left`);
+              } else if (itemHasMultiPool(item)) {
+                if (poolLeft > 0) {
+                  metaParts.push(`${poolLeft} of ${poolSize} left`);
+                } else if (myClaimQty(item, claimMemberId) > 0) {
+                  metaParts.push("Your pick");
+                } else if (qtyOnReceipt > 1) {
+                  metaParts.push(`${poolSize} on receipt`);
+                }
+              } else if (poolLeft < qtyOnReceipt && poolLeft > 0) {
+                metaParts.push(`${poolLeft} left`);
               }
               const myShare = wholeGroup
                 ? shareAmountFor(item, 1)
                 : on
                   ? shareAmountFor(item, myQty)
                   : 0;
+              const otherPickers = formatItemPickers(item, claimMemberId);
 
               return (
                 <div
@@ -511,13 +648,9 @@ export function GroupClaimGate({
                         {metaParts.join(" · ")}
                       </span>
                     )}
-                    {(item.claims?.length ?? 0) > 0 && !wholeGroup ? (
+                    {!wholeGroup && otherPickers && !itemHasMultiPool(item) ? (
                       <span className="pl-8 text-[11px] text-muted-foreground">
-                        Others:{" "}
-                        {item.claims!
-                          .filter((c) => c.member_id !== claimMemberId)
-                          .map((c) => `${c.name} ×${c.quantity}`)
-                          .join(", ") || "—"}
+                        Others: {otherPickers}
                       </span>
                     ) : null}
                   </button>
@@ -528,7 +661,7 @@ export function GroupClaimGate({
                         Your shares
                         <span className="text-muted-foreground/80">
                           {" "}
-                          · {max} left
+                          · {max} of {poolSize} left
                         </span>
                       </span>
                       <div className="flex items-center gap-2">
@@ -568,27 +701,51 @@ export function GroupClaimGate({
             })
           )}
 
-          {takenItems.length > 0 && (
+          {(takenItems.length > 0 || takenByUser.length > 0) && (
             <details className="rounded-2xl border border-border/60 bg-muted/15 px-3 py-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                Already taken ({takenItems.length}) — hidden from your list
+                {othersPickCount > 0
+                  ? takenItems.length > 0 &&
+                    takenItems.length < othersPickCount
+                    ? `Others' picks (${othersPickCount}) · ${takenItems.length} hidden from your list`
+                    : `Others' picks (${othersPickCount})`
+                  : takenItems.length > 0
+                    ? `Already taken (${takenItems.length}) — hidden from your list`
+                    : "Others' picks"}
               </summary>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {takenItems.map((item) => (
-                  <li key={item.id} className="flex justify-between gap-2">
-                    <span className="truncate">{softName(item.name)}</span>
-                    <span className="shrink-0">
-                      {(item.claims ?? [])
-                        .map((c) =>
-                          c.quantity > 1 ? `${c.name} ×${c.quantity}` : c.name
-                        )
-                        .join(", ") ||
-                        (item.claimed_by ?? []).join(", ") ||
-                        "Taken"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-2 space-y-3">
+                {takenByUser.length > 0 ? (
+                  takenByUser.map((group) => (
+                    <div key={group.key}>
+                      <p className="text-xs font-semibold text-foreground/90">
+                        {group.name}
+                        <span className="ml-1.5 font-normal text-muted-foreground">
+                          ({group.items.length})
+                        </span>
+                      </p>
+                      <ul className="mt-1 space-y-0.5 pl-3">
+                        {group.items.map((row) => (
+                          <li
+                            key={row.id}
+                            className="flex gap-1.5 text-[11px] text-muted-foreground"
+                          >
+                            <span className="shrink-0">·</span>
+                            <span className="min-w-0 truncate">{row.label}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))
+                ) : (
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {takenItems.map((item) => (
+                      <li key={item.id} className="truncate">
+                        {softName(item.name)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </details>
           )}
 

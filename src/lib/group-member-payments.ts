@@ -29,25 +29,71 @@ export type MemberPaymentReceipt = {
 
 export type MemberPaymentSummary = {
   member_id: string;
+  /** Total consumption share across all receipts. */
   total: number;
+  /** Amount this member still needs to pay others (excludes bills they paid). */
+  owes: number;
+  /** Paid at least one receipt in this group. */
+  is_bill_payer: boolean;
   currency: string;
   receipts: MemberPaymentReceipt[];
 };
 
+export function parsePaymentProofSource(
+  raw: unknown
+): { manual: boolean; bill_payer: boolean } {
+  const source = (raw as { source?: string } | null)?.source;
+  return {
+    manual: source === "manual",
+    bill_payer: source === "bill_payer",
+  };
+}
+
 export function isMemberMarkedPaid(
-  payTotal: number,
+  owesTotal: number,
   proof?: {
     status: string;
     expected_amount: number;
-    manual: boolean;
+    manual?: boolean;
+    bill_payer?: boolean;
   } | null
 ): boolean {
-  if (!proof || payTotal <= 0) return false;
+  if (!proof || proof.status !== "paid") return false;
+  if (proof.bill_payer && owesTotal <= 0) return true;
+  if (owesTotal <= 0) return false;
   return (
-    proof.status === "paid" &&
-    (Boolean(proof.manual) ||
-      Math.abs(proof.expected_amount - payTotal) <= 1)
+    Boolean(proof.manual) ||
+    Math.abs(proof.expected_amount - owesTotal) <= 1
   );
+}
+
+/** Group owner / creator — used when a receipt has no explicit bill payer. */
+export async function getGroupDefaultPayerMemberId(
+  supabase: SupabaseClient,
+  groupId: string
+): Promise<string | null> {
+  const { data: group } = await supabase
+    .from("groups")
+    .select("created_by")
+    .eq("id", groupId)
+    .maybeSingle();
+
+  const { data: members } = await supabase
+    .from("group_members")
+    .select("id, user_id, role")
+    .eq("group_id", groupId);
+
+  const owner =
+    members?.find((m) => m.role === "owner") ??
+    members?.find((m) => m.user_id === group?.created_by);
+  return owner?.id ?? null;
+}
+
+export function resolveReceiptPayerMemberId(
+  paidByMemberId: string | null | undefined,
+  defaultPayerMemberId: string | null | undefined
+): string | null {
+  return paidByMemberId ?? defaultPayerMemberId ?? null;
 }
 
 type AssignmentRow = {
@@ -65,12 +111,27 @@ async function loadGroupReceiptsWithAssignments(
   let receiptsQuery = await supabase
     .from("receipts")
     .select(
-      `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+      `id, merchant, currency, receipt_date, tax, discount, service_charge, tip, paid_by_member_id,
        receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n, sub_items)`
     )
     .eq("group_id", groupId)
     .order("created_at", { ascending: false })
     .limit(50);
+
+  if (
+    receiptsQuery.error &&
+    /paid_by_member_id|column/i.test(receiptsQuery.error.message)
+  ) {
+    receiptsQuery = (await supabase
+      .from("receipts")
+      .select(
+        `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+         receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n, sub_items)`
+      )
+      .eq("group_id", groupId)
+      .order("created_at", { ascending: false })
+      .limit(50)) as typeof receiptsQuery;
+  }
 
   if (
     receiptsQuery.error &&
@@ -142,12 +203,14 @@ export async function getGroupMemberPayments(
     string,
     {
       total: number;
+      owes: number;
+      is_bill_payer: boolean;
       currency: string;
       receipts: MemberPaymentReceipt[];
     }
   >();
   for (const mid of memberIds) {
-    acc.set(mid, { total: 0, currency: "PHP", receipts: [] });
+    acc.set(mid, { total: 0, owes: 0, is_bill_payer: false, currency: "PHP", receipts: [] });
   }
   if (!memberIds.length) return [];
 
@@ -155,10 +218,20 @@ export async function getGroupMemberPayments(
     supabase,
     groupId
   );
+  const defaultPayerMemberId = await getGroupDefaultPayerMemberId(
+    supabase,
+    groupId
+  );
 
   for (const r of receipts) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items = ((r as any).receipt_items ?? []) as Array<{
+    const receipt = r as any;
+    const paidBy = resolveReceiptPayerMemberId(
+      receipt.paid_by_member_id as string | null | undefined,
+      defaultPayerMemberId
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items = (receipt.receipt_items ?? []) as Array<{
       id: string;
       name: string;
       quantity: number;
@@ -214,6 +287,11 @@ export async function getGroupMemberPayments(
 
       row.currency = currency;
       row.total = moneyNumber(row.total + share.total);
+      if (paidBy && paidBy === share.memberId) {
+        row.is_bill_payer = true;
+      } else if (share.total > 0) {
+        row.owes = moneyNumber(row.owes + share.total);
+      }
 
       const receiptItems: MemberPaymentItem[] = [];
       for (const line of share.lines) {
@@ -249,6 +327,8 @@ export async function getGroupMemberPayments(
     return {
       member_id: mid,
       total: moneyNumber(row.total),
+      owes: moneyNumber(row.owes),
+      is_bill_payer: row.is_bill_payer,
       currency: row.currency,
       receipts: row.receipts,
     };
@@ -268,105 +348,9 @@ export async function getMemberGroupPayTotal(
   const memberIds = (members ?? []).map((m) => m.id);
   if (!memberIds.includes(memberId)) return null;
 
-  const { data: receipts } = await supabase
-    .from("receipts")
-    .select(
-      `id, currency, tax, discount, service_charge, tip,
-       receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n)`
-    )
-    .eq("group_id", groupId)
-    .limit(50);
+  const payments = await getGroupMemberPayments(supabase, groupId, memberIds);
+  const mine = payments.find((p) => p.member_id === memberId);
+  if (!mine) return null;
 
-  if (!receipts?.length) return { total: 0, currency: "PHP" };
-
-  const itemIds = receipts.flatMap((r) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ((r as any).receipt_items ?? []).map((i: { id: string }) => i.id)
-  );
-
-  const assignmentsByItem = new Map<
-    string,
-    Array<{
-      member_id: string;
-      split_method: AssignmentInput["splitMethod"];
-      share_percentage: number | null;
-      share_quantity: number | null;
-      share_amount: number | null;
-    }>
-  >();
-
-  if (itemIds.length) {
-    const { data: assignments } = await supabase
-      .from("receipt_item_assignments")
-      .select(
-        "receipt_item_id, member_id, split_method, share_percentage, share_quantity, share_amount"
-      )
-      .in("receipt_item_id", itemIds);
-    for (const a of assignments ?? []) {
-      const list = assignmentsByItem.get(a.receipt_item_id) ?? [];
-      list.push({
-        member_id: a.member_id,
-        split_method: a.split_method,
-        share_percentage: a.share_percentage,
-        share_quantity: a.share_quantity,
-        share_amount: a.share_amount,
-      });
-      assignmentsByItem.set(a.receipt_item_id, list);
-    }
-  }
-
-  let total = 0;
-  let currency = "PHP";
-
-  for (const r of receipts) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const items = ((r as any).receipt_items ?? []) as Array<{
-      id: string;
-      name: string;
-      quantity: number;
-      total_price: number;
-      split_mode: string | null;
-      split_n: number | null;
-    }>;
-
-    const splitItems: ItemSplitInput[] = items.map((item) => {
-      const asg = assignmentsByItem.get(item.id) ?? [];
-      const assignmentInputs: AssignmentInput[] = asg.map((a) => ({
-        memberId: a.member_id,
-        splitMethod: a.split_method,
-        sharePercentage: a.share_percentage,
-        shareQuantity: a.share_quantity,
-        shareAmount: a.share_amount,
-      }));
-      return {
-        itemId: item.id,
-        itemName: item.name,
-        itemTotal: Number(item.total_price),
-        itemQuantity: Number(item.quantity),
-        splitMode: (item.split_mode as ItemSplitMode) ?? "among_n",
-        splitN: item.split_n ?? null,
-        assignments: assignmentInputs,
-      };
-    });
-
-    const summary = computeSplitBalances(
-      splitItems,
-      {
-        tax: Number(r.tax),
-        discount: Number(r.discount),
-        serviceCharge: Number(r.service_charge),
-        tip: Number(r.tip),
-      },
-      {
-        equalServiceChargeMemberIds: memberIds,
-        groupMemberIds: memberIds,
-      }
-    );
-
-    currency = (r.currency as string) || currency;
-    const share = summary.members.find((m) => m.memberId === memberId);
-    if (share) total = moneyNumber(total + share.total);
-  }
-
-  return { total, currency };
+  return { total: mine.owes, currency: mine.currency };
 }

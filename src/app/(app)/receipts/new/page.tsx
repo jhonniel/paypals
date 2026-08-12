@@ -14,9 +14,10 @@ export default async function NewReceiptPage({
           New receipt
         </h1>
         <p className="mt-1 text-sm text-muted-foreground sm:text-base">
-          Enter items yourself, or scan a photo/PDF. Link it to a group you own when
-          you&apos;re ready to split.
-          {group ? " This receipt will be shared with your group." : ""}
+          Scan one receipt at a time. If you have multiple receipts in one transaction
+          — or one long receipt that doesn&apos;t fit in the camera — upload or capture
+          each one separately. Each photo is OCR-scanned before you add the next.
+          {group ? " All receipts will be shared with your group." : ""}
         </p>
       </div>
       <ReceiptUploader groupId={group ?? null} />

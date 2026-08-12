@@ -3,6 +3,7 @@ import { moneyNumber } from "@/lib/money";
 import {
   getGroupMemberPayments,
   isMemberMarkedPaid,
+  parsePaymentProofSource,
   type MemberPaymentReceipt,
 } from "@/lib/group-member-payments";
 
@@ -84,20 +85,20 @@ export async function computeFriendUnpaidBalances(
       { status: string; expected_amount: number; manual: boolean }
     >();
     for (const p of proofsRaw ?? []) {
-      const raw = p.ocr_raw as { source?: string } | null;
+      const proofMeta = parsePaymentProofSource(p.ocr_raw);
       proofsByMember.set(p.from_member_id, {
         status: p.status,
         expected_amount: Number(p.expected_amount),
-        manual: raw?.source === "manual",
+        ...proofMeta,
       });
     }
 
     for (const fm of friendMembers) {
       const pay = payments.find((p) => p.member_id === fm.id);
-      const payTotal = pay?.total ?? 0;
+      const owesTotal = pay?.owes ?? pay?.total ?? 0;
       const proof = proofsByMember.get(fm.id);
-      const paid = isMemberMarkedPaid(payTotal, proof);
-      if (paid || payTotal <= 0) continue;
+      const paid = isMemberMarkedPaid(owesTotal, proof);
+      if (paid || owesTotal <= 0) continue;
 
       const friendId = fm.user_id as string;
       const entry = result.get(friendId);
@@ -108,11 +109,11 @@ export async function computeFriendUnpaidBalances(
         group_id: group.id,
         group_name: group.name,
         member_id: fm.id,
-        unpaid_total: payTotal,
+        unpaid_total: owesTotal,
         currency: pay?.currency ?? "PHP",
         receipts: pay?.receipts ?? [],
       });
-      entry.total_unpaid = moneyNumber(entry.total_unpaid + payTotal);
+      entry.total_unpaid = moneyNumber(entry.total_unpaid + owesTotal);
       entry.currency = pay?.currency ?? entry.currency;
     }
   }

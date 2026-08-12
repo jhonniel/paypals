@@ -9,6 +9,9 @@ import {
   Loader2,
   X,
   PenLine,
+  Plus,
+  CheckCircle2,
+  ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -51,12 +54,23 @@ async function maybeConvertHeic(file: File): Promise<File> {
   }
 }
 
+type SessionReceipt = {
+  id: string;
+  fileName: string;
+  previewUrl: string | null;
+  itemCount: number;
+  ocrFailed: boolean;
+  warning?: string;
+};
+
 export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileQueueRef = useRef<File[]>([]);
+  const previewUrlRef = useRef<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -66,6 +80,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
   const [linkGroupId, setLinkGroupId] = useState(groupId ?? "");
   const [liveCameraOpen, setLiveCameraOpen] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
+  const [sessionReceipts, setSessionReceipts] = useState<SessionReceipt[]>([]);
 
   const { data: groupGate, isLoading: gateLoading } = useQuery({
     queryKey: ["group-upload-gate", groupId],
@@ -102,6 +117,42 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
     Boolean(groupId) && !gateLoading && groupGate != null && groupGate.my_role !== "owner";
 
   const effectiveGroupId = groupId || linkGroupId || null;
+  const inSession = sessionReceipts.length > 0;
+
+  function revokePreviewUrl(url: string | null) {
+    if (url) URL.revokeObjectURL(url);
+  }
+
+  function clearActivePreview() {
+    revokePreviewUrl(previewUrlRef.current);
+    previewUrlRef.current = null;
+    setPreview(null);
+    setFileName(null);
+  }
+
+  function finishSession() {
+    if (sessionReceipts.length === 0) return;
+    if (sessionReceipts.length === 1) {
+      router.push(`/receipts/${sessionReceipts[0].id}`);
+      router.refresh();
+      return;
+    }
+    if (groupId) {
+      toast.success(
+        `Added ${sessionReceipts.length} receipts — review them on the group page`
+      );
+      router.push(`/groups/${groupId}`);
+      router.refresh();
+      return;
+    }
+    router.push(`/receipts/${sessionReceipts[sessionReceipts.length - 1].id}`);
+    router.refresh();
+  }
+
+  const sessionReceiptsRef = useRef<SessionReceipt[]>([]);
+  useEffect(() => {
+    sessionReceiptsRef.current = sessionReceipts;
+  }, [sessionReceipts]);
 
   async function createManualReceipt() {
     if (effectiveGroupId && groupId && groupGate && groupGate.my_role !== "owner") {
@@ -137,11 +188,14 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         return;
       }
       setFileName(file.name);
+      let localPreview: string | null = null;
       if (file.type.startsWith("image/") || /\.(heic|heif)$/i.test(file.name)) {
-        const url = URL.createObjectURL(file);
-        setPreview(url);
+        revokePreviewUrl(previewUrlRef.current);
+        localPreview = URL.createObjectURL(file);
+        previewUrlRef.current = localPreview;
+        setPreview(localPreview);
       } else {
-        setPreview(null);
+        clearActivePreview();
       }
 
       setUploading(true);
@@ -176,43 +230,81 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         }
 
         const payload = parsed.data.data;
-        if (payload.warning || payload.ocrFailed) {
-          toast.message("OCR could not read all items", {
-            description:
-              String(payload.warning ?? "Add items manually or tap Re-run OCR.").slice(
-                0,
-                160
-              ),
-          });
-        } else {
-          const count = payload.itemCount ?? 0;
-          toast.success(
-            count
-              ? `Scanned ${count} item${count === 1 ? "" : "s"}`
-              : "Receipt uploaded — add items manually"
-          );
-        }
+        const count = payload.itemCount ?? 0;
 
-        router.push(`/receipts/${payload.id}`);
-        router.refresh();
+        setSessionReceipts((prev) => {
+          const receiptNum = prev.length + 1;
+          if (payload.warning || payload.ocrFailed) {
+            toast.message(`Receipt ${receiptNum}: OCR could not read all items`, {
+              description: String(
+                payload.warning ?? "Edit manually or tap Re-run OCR."
+              ).slice(0, 160),
+            });
+          } else {
+            toast.success(
+              count
+                ? `Receipt ${receiptNum}: scanned ${count} item${count === 1 ? "" : "s"}`
+                : `Receipt ${receiptNum} uploaded — add items manually`
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: payload.id,
+              fileName: file.name,
+              previewUrl: localPreview,
+              itemCount: count,
+              ocrFailed: Boolean(payload.ocrFailed),
+              warning: payload.warning,
+            },
+          ];
+        });
+        previewUrlRef.current = null;
+        setPreview(null);
+        setFileName(null);
+        setScanning(false);
+        const next = fileQueueRef.current.shift();
+        if (next) void processFile(next);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed");
         setScanning(false);
+        const next = fileQueueRef.current.shift();
+        if (next) void processFile(next);
       } finally {
         setUploading(false);
       }
     },
-    [router, groupId, groupGate, effectiveGroupId]
+    [groupId, groupGate, effectiveGroupId]
+  );
+
+  const enqueueFiles = useCallback(
+    (files: File[]) => {
+      const list = files.filter(Boolean);
+      if (!list.length) return;
+      if (uploading || scanning) {
+        fileQueueRef.current.push(...list);
+        toast.message(
+          list.length === 1
+            ? "Queued — will scan after the current receipt"
+            : `Queued ${list.length} receipts — scanning one at a time`
+        );
+        return;
+      }
+      const [first, ...rest] = list;
+      fileQueueRef.current.push(...rest);
+      void processFile(first);
+    },
+    [processFile, uploading, scanning]
   );
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragging(false);
-      const file = e.dataTransfer.files?.[0];
-      if (file) void processFile(file);
+      const files = Array.from(e.dataTransfer.files ?? []);
+      if (files.length) enqueueFiles(files);
     },
-    [processFile]
+    [enqueueFiles]
   );
 
   async function pasteFromClipboard() {
@@ -225,7 +317,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         const file = new File([blob], `clipboard-${Date.now()}.png`, {
           type: blob.type || "image/png",
         });
-        await processFile(file);
+        enqueueFiles([file]);
         return;
       }
       toast.error("No image found on clipboard");
@@ -305,7 +397,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         const file = new File([blob], `camera-${Date.now()}.jpg`, {
           type: "image/jpeg",
         });
-        void processFile(file);
+        void enqueueFiles([file]);
       },
       "image/jpeg",
       0.92
@@ -319,12 +411,16 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
     if (!item) return;
     e.preventDefault();
     const blob = item.getAsFile();
-    if (blob) void processFile(blob);
+    if (blob) enqueueFiles([blob]);
   }
 
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      revokePreviewUrl(previewUrlRef.current);
+      for (const receipt of sessionReceiptsRef.current) {
+        revokePreviewUrl(receipt.previewUrl);
+      }
     };
   }, []);
 
@@ -347,8 +443,9 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           <Label htmlFor="link-group">Link to a group (optional)</Label>
           <select
             id="link-group"
-            className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm"
+            className="flex h-11 w-full rounded-xl border border-input bg-surface-elevated/60 px-3 text-sm disabled:opacity-60"
             value={linkGroupId}
+            disabled={inSession}
             onChange={(e) => setLinkGroupId(e.target.value)}
           >
             <option value="">No group yet — link later</option>
@@ -358,6 +455,68 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {!blockedForGroup && inSession && (
+        <div className="space-y-3 rounded-2xl border border-border bg-muted/20 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">This transaction</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {sessionReceipts.length} receipt
+                {sessionReceipts.length === 1 ? "" : "s"} scanned — add more if you
+                have separate receipts or one didn&apos;t fit in the camera frame.
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={uploading || scanning}
+              onClick={finishSession}
+            >
+              {sessionReceipts.length === 1 ? "Review receipt" : "Done"}
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+          <ul className="space-y-2">
+            {sessionReceipts.map((receipt, index) => (
+              <li
+                key={receipt.id}
+                className="flex items-center gap-3 rounded-xl border border-border/80 bg-background/60 px-3 py-2.5"
+              >
+                <div className="flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+                  {receipt.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={receipt.previewUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <FileImage className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    Receipt {index + 1}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {receipt.itemCount > 0
+                      ? `${receipt.itemCount} item${receipt.itemCount === 1 ? "" : "s"} scanned`
+                      : "Add items manually"}
+                    {receipt.ocrFailed ? " · OCR partial" : ""}
+                    {" · "}
+                    {receipt.fileName}
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="shrink-0" asChild>
+                  <Link href={`/receipts/${receipt.id}`}>Edit</Link>
+                </Button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -398,11 +557,12 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           <Upload className="h-6 w-6" />
         </div>
         <h2 className="text-lg font-semibold tracking-tight sm:text-xl">
-          Drop a receipt here
+          {inSession ? "Add another receipt" : "Drop a receipt here"}
         </h2>
         <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-          PNG, JPG, WEBP, HEIC, or PDF. Photos are compressed automatically before
-          upload. Paste from clipboard with ⌘V / Ctrl+V.
+          {inSession
+            ? "Each photo is scanned separately. Upload or capture the next receipt, then tap Done when finished."
+            : "PNG, JPG, WEBP, HEIC, or PDF. Multiple receipts in one transaction? Scan them one at a time — paste with ⌘V / Ctrl+V."}
         </p>
 
         <div className="mt-8 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
@@ -411,7 +571,8 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
             disabled={uploading}
             onClick={() => inputRef.current?.click()}
           >
-            <FileImage /> Choose file
+            {inSession ? <Plus /> : <FileImage />}
+            {inSession ? "Upload another" : "Choose file(s)"}
           </Button>
           <Button
             type="button"
@@ -437,7 +598,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
               ) : (
                 <Camera />
               )}
-              Camera
+              {inSession ? "Capture another" : "Camera"}
             </label>
           </Button>
           <Button
@@ -456,11 +617,12 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           ref={inputRef}
           type="file"
           accept={ACCEPT}
+          multiple
           className="pointer-events-none absolute h-px w-px opacity-0"
           tabIndex={-1}
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void processFile(f);
+            const files = Array.from(e.target.files ?? []);
+            if (files.length) enqueueFiles(files);
             e.target.value = "";
           }}
         />
@@ -474,7 +636,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           tabIndex={-1}
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) void processFile(f);
+            if (f) enqueueFiles([f]);
             e.target.value = "";
           }}
         />
@@ -484,7 +646,11 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
       {liveCameraOpen && (
         <div className="fixed inset-0 z-[100] flex flex-col bg-black/90">
           <div className="flex items-center justify-between gap-2 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
-            <p className="text-sm font-medium text-white">Take a receipt photo</p>
+            <p className="text-sm font-medium text-white">
+              {inSession
+                ? `Receipt ${sessionReceipts.length + 1} — take a photo`
+                : "Take a receipt photo"}
+            </p>
             <Button
               type="button"
               size="icon"
@@ -513,29 +679,12 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
               Cancel
             </Button>
             <Button type="button" onClick={captureFromLiveCamera} disabled={cameraStarting}>
-              <Camera /> Capture
+              <Camera /> {inSession ? "Capture & scan" : "Capture"}
             </Button>
           </div>
         </div>
       )}
 
-      {fileName && !scanning && !blockedForGroup && (
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border px-4 py-3 text-sm">
-          <span className="truncate text-muted-foreground">{fileName}</span>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            aria-label="Clear"
-            onClick={() => {
-              setFileName(null);
-              setPreview(null);
-            }}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

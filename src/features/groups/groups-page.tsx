@@ -10,7 +10,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Users, Loader2, KeyRound, ArrowRight } from "lucide-react";
+import { Plus, Users, Loader2, KeyRound, ArrowRight, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,8 +29,10 @@ type GroupRow = {
   my_role: string;
   created_at: string;
   my_owes?: number;
+  my_share?: number;
   my_currency?: string;
   my_paid?: boolean;
+  my_is_bill_payer?: boolean;
   my_receipts?: Array<{
     receipt_id: string;
     merchant: string | null;
@@ -104,6 +106,9 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
   const owes = group.my_owes ?? 0;
   const currency = group.my_currency ?? "PHP";
   const receipts = group.my_receipts ?? [];
+  const billPaid =
+    Boolean(group.my_paid) ||
+    (Boolean(group.my_is_bill_payer) && owes <= 0);
   const itemCount = receipts.reduce(
     (total, receipt) => total + receipt.items.length,
     0
@@ -121,8 +126,8 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
-    // Let links work normally.
-    if (target.closest("a")) return;
+    // Let links / footer Open control work normally.
+    if (target.closest("a, button")) return;
 
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
@@ -237,7 +242,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
         onDoubleClick={onDoubleClick}
         title={
           flipped
-            ? "Double-tap or double-click to flip back"
+            ? "Tap rotate to flip back, or double-tap the card"
             : "Tap to view items"
         }
         className={`relative h-full w-full select-none ${
@@ -285,6 +290,10 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
             <p className="rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
               Paid
             </p>
+          ) : group.my_is_bill_payer && (group.my_share ?? 0) > 0 ? (
+            <p className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary">
+              You paid the bill
+            </p>
           ) : null}
           {flareKey > 0 && (
             <span
@@ -301,12 +310,38 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
           style={{ ...faceStyle, transform: "rotateY(180deg)" }}
         >
           <div className="flex items-center gap-2">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{group.name}</p>
               <p className="text-[10px] text-muted-foreground">
                 {itemCount} item{itemCount === 1 ? "" : "s"}
               </p>
             </div>
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Flip back"
+              onPointerDown={(e) => {
+                // Don't start card drag / double-tap tracking
+                e.stopPropagation();
+                e.preventDefault();
+              }}
+              onPointerUp={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                suppressTapRef.current = true;
+                window.setTimeout(() => {
+                  suppressTapRef.current = false;
+                }, 80);
+                // Single tap on icon flips back (card still needs double-tap)
+                snapTo(rotation + 180);
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+              }}
+            >
+              <RotateCw className="h-4 w-4 -scale-x-100" />
+            </button>
           </div>
 
           <div className="my-2 min-h-0 flex-1 overflow-y-auto pr-1">
@@ -323,6 +358,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                       items={receipt.items}
                       currency={receipt.currency}
                       dense
+                      showTotal={billPaid}
                     />
                   </div>
                 ))}
@@ -333,24 +369,40 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                   No assigned items yet
                 </p>
                 <p className="mt-2 text-[10px] text-muted-foreground/80">
-                  Double-tap to flip back
+                  Tap rotate to flip back, or double-tap the card
                 </p>
               </div>
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-border/60 pt-2">
+          <Link
+            href={`/groups/${group.id}`}
+            className="flex w-full items-center justify-between border-t border-border/60 pt-2 transition-colors hover:opacity-90"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              suppressTapRef.current = true;
+              window.setTimeout(() => {
+                suppressTapRef.current = false;
+              }, 80);
+            }}
+            aria-label={`Open ${group.name}`}
+          >
             <span className="text-sm font-semibold tabular-nums">
-              {group.my_paid ? "Paid" : money(owes, currency)}
+              {group.my_paid
+                ? "Paid"
+                : owes > 0
+                  ? money(owes, currency)
+                  : group.my_is_bill_payer
+                    ? "Bill paid"
+                    : money(0, currency)}
             </span>
-            <Link
-              href={`/groups/${group.id}`}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-primary"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary">
               Open <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
+            </span>
+          </Link>
           {flareKey > 0 && (
             <span
               key={`back-flare-${flareKey}`}

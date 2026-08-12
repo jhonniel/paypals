@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -38,7 +39,10 @@ import {
 import { cn } from "@/utils/cn";
 import { ItemBreakdownList } from "@/components/item-breakdown-list";
 import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
-
+import {
+  getReceiptUnclaimedItems,
+  ownerItemClaimLine,
+} from "@/lib/receipt-unclaimed";
 type Member = {
   id: string;
   role: string;
@@ -111,6 +115,8 @@ type GroupDetail = {
   can_manage_members?: boolean;
   my_payment?: {
     total: number;
+    owes?: number;
+    is_bill_payer?: boolean;
     currency: string;
     receipts: Array<{
       receipt_id: string;
@@ -122,6 +128,8 @@ type GroupDetail = {
   member_payments?: Array<{
     member_id: string;
     total: number;
+    owes?: number;
+    is_bill_payer?: boolean;
     currency: string;
     items: Array<{
       name: string;
@@ -145,6 +153,7 @@ type GroupDetail = {
     validated_at: string | null;
     rejection_reason: string | null;
     manual?: boolean;
+    bill_payer?: boolean;
   }>;
   invite_url: string;
 };
@@ -193,9 +202,11 @@ const PREVIEW_ITEMS = 5;
 function GroupReceiptCard({
   receipt: r,
   onPickItems,
+  showUnclaimed,
 }: {
   receipt: GroupReceipt;
   onPickItems?: () => void;
+  showUnclaimed?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -205,6 +216,7 @@ function GroupReceiptCard({
   const hiddenCount = Math.max(0, r.items.length - PREVIEW_ITEMS);
   const when = formatReceiptWhen(r.receipt_date, r.receipt_time);
   const showImage = Boolean(r.image_url) && !imageBroken;
+  const unclaimed = showUnclaimed ? getReceiptUnclaimedItems(r.items) : null;
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -269,11 +281,44 @@ function GroupReceiptCard({
               </p>
               <p className="text-[11px] text-muted-foreground">
                 {r.items.length} item{r.items.length === 1 ? "" : "s"}
+                {unclaimed && unclaimed.count > 0 ? (
+                  <span className="ml-1 font-medium text-amber-600 dark:text-amber-400">
+                    · {unclaimed.count} unclaimed
+                  </span>
+                ) : null}
               </p>
             </div>
           </div>
         </div>
       </div>
+
+      {unclaimed && unclaimed.count > 0 ? (
+        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+            {unclaimed.count} item{unclaimed.count === 1 ? "" : "s"} still unclaimed
+            <span className="font-normal text-amber-800/90 dark:text-amber-200/90">
+              {" "}
+              · about {money(unclaimed.totalValue, currency)}
+            </span>
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {unclaimed.items.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-baseline justify-between gap-2 text-xs text-amber-900/90 dark:text-amber-100/90"
+              >
+                <span className="min-w-0 truncate">
+                  {titleCaseItem(item.name)}
+                  <span className="ml-1 font-normal opacity-80">· {item.label}</span>
+                </span>
+                <span className="shrink-0 tabular-nums opacity-90">
+                  {money(item.value, currency)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {r.items.length > 0 ? (
         <div className="mt-3 max-w-lg">
@@ -290,15 +335,21 @@ function GroupReceiptCard({
                   : (item.claimed_by ?? []).join(", ");
               const isGroupSplit = item.split_mode === "among_group";
               const othersN = item.others_claim_count ?? 0;
-              const claimLine = isGroupSplit
-                ? "Split with whole group"
-                : claimLabel
-                  ? othersN > 0
-                    ? "You claimed this · others also claimed"
-                    : `Claimed by ${claimLabel}`
-                  : othersN > 0 || item.claimers_hidden
-                    ? "Already claimed"
-                    : "Not claimed yet";
+
+              const ownerLine = showUnclaimed ? ownerItemClaimLine(item) : null;
+              const claimLine = ownerLine
+                ? ownerLine.line
+                : isGroupSplit
+                  ? "Split with whole group"
+                  : claimLabel
+                    ? othersN > 0
+                      ? "You claimed this · others also claimed"
+                      : `Claimed by ${claimLabel}`
+                    : othersN > 0 || item.claimers_hidden
+                      ? "Already claimed"
+                      : "Not claimed yet";
+              const claimUnclaimed = ownerLine?.unclaimed ?? false;
+
               return (
                 <li key={item.id} className="text-sm">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2">
@@ -313,11 +364,14 @@ function GroupReceiptCard({
                     </span>
                   </div>
                   <p
-                    className={
-                      claimLabel || isGroupSplit
-                        ? "mt-0.5 truncate text-[11px] text-muted-foreground"
-                        : "mt-0.5 text-[11px] italic text-muted-foreground/70"
-                    }
+                    className={cn(
+                      "mt-0.5 truncate text-[11px]",
+                      claimUnclaimed
+                        ? "font-medium text-amber-700 dark:text-amber-300"
+                        : claimLabel || isGroupSplit
+                          ? "text-muted-foreground"
+                          : "italic text-muted-foreground/70"
+                    )}
                   >
                     {claimLine}
                   </p>
@@ -430,6 +484,7 @@ export function GroupDetailView({
   groupId: string;
   currentUserId: string;
 }) {
+  const router = useRouter();
   const qc = useQueryClient();
   useGroupRealtime(groupId, () => {
     void qc.invalidateQueries({ queryKey: ["group", groupId] });
@@ -474,6 +529,8 @@ export function GroupDetailView({
     paid: boolean;
   } | null>(null);
   const [flippedMembers, setFlippedMembers] = useState<Set<string>>(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingGroup, setDeletingGroup] = useState(false);
 
   function toggleMemberFlip(memberId: string) {
     setFlippedMembers((prev) => {
@@ -490,6 +547,23 @@ export function GroupDetailView({
     data?.group.created_by === currentUserId;
   const isCreator =
     data?.group.created_by === currentUserId || data?.my_role === "owner";
+  const isOwner = data?.my_role === "owner";
+  const groupUnclaimedSummary = canManage
+    ? (data?.receipts ?? []).reduce(
+        (acc, receipt) => {
+          const summary = getReceiptUnclaimedItems(receipt.items);
+          acc.count += summary.count;
+          acc.totalValue += summary.totalValue;
+          if (receipt.currency) acc.currency = receipt.currency;
+          return acc;
+        },
+        {
+          count: 0,
+          totalValue: 0,
+          currency: data?.receipts?.[0]?.currency ?? "PHP",
+        }
+      )
+    : null;
   const memberUserIds = new Set(
     (data?.members ?? []).map((m) => m.user_id).filter(Boolean) as string[]
   );
@@ -638,6 +712,24 @@ export function GroupDetailView({
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function deleteGroup() {
+    setDeletingGroup(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}`, { method: "DELETE" });
+      const parsed = await readApiJson<{ data: { deleted: boolean } }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      toast.success("Group deleted");
+      setDeleteConfirmOpen(false);
+      await qc.invalidateQueries({ queryKey: ["groups"] });
+      router.push("/groups");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete group");
+    } finally {
+      setDeletingGroup(false);
     }
   }
 
@@ -791,9 +883,23 @@ export function GroupDetailView({
           <div>
             <CardTitle className="text-base">Receipts ({data.receipts?.length ?? 0})</CardTitle>
             <CardDescription>
-              {isCreator
-                ? "Upload receipts for the group — members tap what they ordered"
-                : "Open a receipt and tap what you got"}
+              {canManage && (groupUnclaimedSummary?.count ?? 0) > 0 ? (
+                <>
+                  <span className="font-medium text-amber-700 dark:text-amber-300">
+                    {groupUnclaimedSummary!.count} item
+                    {groupUnclaimedSummary!.count === 1 ? "" : "s"} still unclaimed
+                    {" · "}
+                    about {money(groupUnclaimedSummary!.totalValue, groupUnclaimedSummary!.currency)}
+                  </span>
+                  <span className="mt-0.5 block text-muted-foreground">
+                    See which lines are open below — assign from a member tile if needed.
+                  </span>
+                </>
+              ) : isCreator ? (
+                "Upload receipts for the group — members tap what they ordered"
+              ) : (
+                "Open a receipt and tap what you got"
+              )}
             </CardDescription>
           </div>
           {isCreator && (
@@ -824,6 +930,7 @@ export function GroupDetailView({
               <GroupReceiptCard
                 key={r.id}
                 receipt={r}
+                showUnclaimed={canManage}
                 onPickItems={
                   data.my_member_id
                     ? () => setClaimReceiptId(r.id)
@@ -896,15 +1003,23 @@ export function GroupDetailView({
               const isOwnerSeat = m.role === "owner";
               const pay = data.member_payments?.find((p) => p.member_id === m.id);
               const payTotal = pay?.total ?? 0;
+              const owesTotal = pay?.owes ?? payTotal;
+              const isBillPayer = pay?.is_bill_payer ?? false;
               const payCurrency = pay?.currency ?? "PHP";
               const items = pay?.items ?? [];
               const initial = label.trim().charAt(0).toUpperCase() || "?";
               const proof = data.payment_proofs?.find((p) => p.member_id === m.id);
+              const proofMeta = {
+                manual: Boolean(proof?.manual),
+                bill_payer: Boolean(proof?.bill_payer),
+              };
               const isPaid =
                 proof?.status === "paid" &&
-                payTotal > 0 &&
-                (Boolean(proof.manual) ||
-                  Math.abs((proof.expected_amount ?? 0) - payTotal) <= 1);
+                (isBillPayer && owesTotal <= 0
+                  ? proofMeta.bill_payer || proofMeta.manual
+                  : owesTotal > 0 &&
+                    (proofMeta.manual ||
+                      Math.abs((proof.expected_amount ?? 0) - owesTotal) <= 1));
               const canFlip = (canManage || isMe) && items.length > 0;
               const isFlipped = canFlip && flippedMembers.has(m.id);
               return (
@@ -967,7 +1082,7 @@ export function GroupDetailView({
                     )}
                   </div>
 
-                  {(canManage || isMe) && (
+                  {(canManage || isMe) && payTotal > 0 && (
                     <div className="mt-3 rounded-xl bg-background/60 px-3 py-2 text-center">
                       {isPaid ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
@@ -975,15 +1090,29 @@ export function GroupDetailView({
                           Paid
                           {proof?.manual ? (
                             <span className="font-normal opacity-80">· manual</span>
+                          ) : proofMeta.bill_payer ? (
+                            <span className="font-normal opacity-80">· bill payer</span>
                           ) : null}
                         </span>
+                      ) : isBillPayer && owesTotal <= 0 ? (
+                        <>
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {isMe ? "You paid the bill" : "Bill payer"}
+                          </p>
+                          <p className="text-xl font-semibold tabular-nums tracking-tight">
+                            {money(payTotal, payCurrency)}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground">
+                            {isMe ? "Your share" : "Share"}
+                          </p>
+                        </>
                       ) : (
                         <>
                           <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                             {isMe && !canManage ? "You owe in this group" : "Pays"}
                           </p>
                           <p className="text-xl font-semibold tabular-nums tracking-tight">
-                            {money(payTotal, payCurrency)}
+                            {money(owesTotal, payCurrency)}
                           </p>
                         </>
                       )}
@@ -1000,9 +1129,18 @@ export function GroupDetailView({
                     </button>
                   )}
 
-                  {isMe && (data.where_to_pay?.length ?? 0) > 0 && payTotal > 0 && (
+                  {isMe &&
+                    owesTotal > 0 &&
+                    !isPaid &&
+                    (data.where_to_pay?.filter(
+                      (payer) => payer.member_id !== data.my_member_id
+                    ).length ?? 0) > 0 && (
                     <div className="mt-2 space-y-2 rounded-xl border border-border/60 bg-background/40 px-3 py-2.5">
-                      {data.where_to_pay!.map((payer) => (
+                      {data
+                        .where_to_pay!.filter(
+                          (payer) => payer.member_id !== data.my_member_id
+                        )
+                        .map((payer) => (
                         <div key={payer.member_id} className="space-y-2">
                           {payer.methods.map((method) => (
                             <div
@@ -1080,8 +1218,10 @@ export function GroupDetailView({
                   )}
 
                   {isMe &&
-                    payTotal > 0 &&
-                    (data.where_to_pay?.length ?? 0) === 0 &&
+                    owesTotal > 0 &&
+                    (data.where_to_pay?.filter(
+                      (payer) => payer.member_id !== data.my_member_id
+                    ).length ?? 0) === 0 &&
                     canManage && (
                       <p className="mt-2 text-[11px] text-muted-foreground">
                         Add receiving accounts in{" "}
@@ -1093,15 +1233,17 @@ export function GroupDetailView({
                     )}
 
                   {isMe &&
-                    payTotal > 0 &&
-                    (data.where_to_pay?.length ?? 0) === 0 &&
+                    owesTotal > 0 &&
+                    (data.where_to_pay?.filter(
+                      (payer) => payer.member_id !== data.my_member_id
+                    ).length ?? 0) === 0 &&
                     !canManage && (
                       <p className="mt-2 text-[11px] italic text-muted-foreground/80">
                         Ask the payer to add their GCash/bank in Settings.
                       </p>
                     )}
 
-                  {isMe && payTotal > 0 && !isPaid && (
+                  {isMe && owesTotal > 0 && !isPaid && (
                     <div className="mt-2 space-y-1.5">
                       <label className="flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-3 text-center hover:bg-muted/40">
                         <input
@@ -1127,7 +1269,7 @@ export function GroupDetailView({
                               Upload payment proof
                             </span>
                             <span className="text-[11px] text-muted-foreground">
-                              Screenshot must show {money(payTotal, payCurrency)}{" "}
+                              Screenshot must show {money(owesTotal, payCurrency)}{" "}
                               and today’s date (Asia/Manila)
                             </span>
                           </>
@@ -1142,9 +1284,9 @@ export function GroupDetailView({
                   )}
 
                   {canManage &&
-                    (payTotal > 0 || (data.receipts?.length ?? 0) > 0) && (
+                    (owesTotal > 0 || (data.receipts?.length ?? 0) > 0) && (
                       <div className="mt-2 flex gap-1.5">
-                        {payTotal > 0 && (
+                        {owesTotal > 0 && (
                           <Button
                             type="button"
                             size="sm"
@@ -1155,7 +1297,7 @@ export function GroupDetailView({
                               setMarkPaidConfirm({
                                 memberId: m.id,
                                 name: label,
-                                amountLabel: money(payTotal, payCurrency),
+                                amountLabel: money(owesTotal, payCurrency),
                                 paid: !isPaid,
                               })
                             }
@@ -1313,21 +1455,16 @@ export function GroupDetailView({
                         items={items}
                         currency={payCurrency}
                         titleCase={titleCaseItem}
+                        total={payTotal}
+                        showTotal={
+                          isPaid || (isBillPayer && owesTotal <= 0)
+                        }
                       />
                     ) : (
                       <p className="text-[11px] italic text-muted-foreground/70">
                         No items yet
                       </p>
                     )}
-                  </div>
-
-                  <div className="mt-3 flex items-baseline justify-between border-t border-border/60 pt-2">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Total
-                    </span>
-                    <span className="text-base font-semibold tabular-nums tracking-tight">
-                      {money(payTotal, payCurrency)}
-                    </span>
                   </div>
                 </div>
                 </div>
@@ -1337,6 +1474,33 @@ export function GroupDetailView({
           </div>
         </CardContent>
       </Card>
+
+      {isOwner && (
+        <Card className="border-destructive/25">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Delete group</CardTitle>
+            <CardDescription>
+              Permanently remove this group, its receipts, splits, and payment records.
+              Members will lose access. This cannot be undone.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deletingGroup}
+              onClick={() => setDeleteConfirmOpen(true)}
+            >
+              {deletingGroup ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Delete group
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {inviteModalOpen && (
         <InviteMembersModal
@@ -1356,6 +1520,18 @@ export function GroupDetailView({
           onAddUsername={(e) => void addByUsername(e)}
           onAddGuest={(e) => void addGuest(e)}
           onClose={() => setInviteModalOpen(false)}
+        />
+      )}
+
+      {deleteConfirmOpen && data && (
+        <DeleteGroupConfirmModal
+          groupName={data.group.name}
+          busy={deletingGroup}
+          onConfirm={() => void deleteGroup()}
+          onClose={() => {
+            if (deletingGroup) return;
+            setDeleteConfirmOpen(false);
+          }}
         />
       )}
 
@@ -1812,6 +1988,122 @@ function MarkPaidConfirmModal({
                 "Confirm paid"
               ) : (
                 "Confirm unpaid"
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function DeleteGroupConfirmModal({
+  groupName,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  groupName: string;
+  busy: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, busy]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-group-confirm-title"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+        aria-label="Close dialog"
+        disabled={busy}
+        onClick={onClose}
+      />
+      <div
+        className="relative z-[1] w-full max-w-sm overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
+        style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <h2 id="delete-group-confirm-title" className="text-base font-semibold">
+              Delete group?
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              This permanently removes the group and all related receipts and payments.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-10 w-10 shrink-0"
+            aria-label="Close"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="space-y-4 px-4 py-4">
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-center">
+            <p className="text-sm font-medium">{groupName}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              All members will lose access to this group.
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="flex-1"
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Delete group"
               )}
             </Button>
           </div>

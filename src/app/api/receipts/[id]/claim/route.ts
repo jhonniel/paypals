@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, notFound, fail, fromZod, serverError } from "@/lib/api";
 import { itemClaimSlots } from "@/lib/splits";
+import { autoSettleBillPayerAfterClaim } from "@/lib/auto-settle-bill-payer";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -307,6 +308,20 @@ async function finalizeClaim(
     },
   });
   if (histErr) return fail(histErr.message, 400);
+
+  const { data: receiptRow } = await supabase
+    .from("receipts")
+    .select("group_id")
+    .eq("id", receiptId)
+    .maybeSingle();
+
+  if (receiptRow?.group_id) {
+    await autoSettleBillPayerAfterClaim(
+      supabase,
+      receiptRow.group_id,
+      myMemberId
+    );
+  }
 
   return ok({ confirmed: true, claimed: mine.length });
 }

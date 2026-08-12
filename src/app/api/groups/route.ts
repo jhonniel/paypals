@@ -4,6 +4,7 @@ import { ok, created, unauthorized, fail, fromZod, serverError } from "@/lib/api
 import {
   getGroupMemberPayments,
   isMemberMarkedPaid,
+  parsePaymentProofSource,
 } from "@/lib/group-member-payments";
 
 export async function GET() {
@@ -42,34 +43,43 @@ export async function GET() {
         );
         const pay = payments.find((payment) => payment.member_id === m.id);
         const payTotal = pay?.total ?? 0;
+        const owesTotal = pay?.owes ?? payTotal;
+        const isBillPayer = pay?.is_bill_payer ?? false;
         const currency = pay?.currency ?? "PHP";
 
-        let unpaid = payTotal;
+        let unpaid = owesTotal;
         let paid = false;
-        if (payTotal > 0) {
-          const { data: proof } = await supabase
-            .from("group_payment_proofs")
-            .select("status, expected_amount, ocr_raw")
-            .eq("group_id", m.group_id)
-            .eq("from_member_id", m.id)
-            .maybeSingle();
-          const raw = proof?.ocr_raw as { source?: string } | null;
-          paid = isMemberMarkedPaid(payTotal, proof
-            ? {
-                status: proof.status,
-                expected_amount: Number(proof.expected_amount),
-                manual: raw?.source === "manual",
-              }
-            : null);
-          if (paid) unpaid = 0;
+
+        const { data: proof } = await supabase
+          .from("group_payment_proofs")
+          .select("status, expected_amount, ocr_raw")
+          .eq("group_id", m.group_id)
+          .eq("from_member_id", m.id)
+          .maybeSingle();
+
+        if (owesTotal > 0 || isBillPayer) {
+          const proofMeta = parsePaymentProofSource(proof?.ocr_raw);
+          paid = isMemberMarkedPaid(
+            owesTotal,
+            proof
+              ? {
+                  status: proof.status,
+                  expected_amount: Number(proof.expected_amount),
+                  ...proofMeta,
+                }
+              : null
+          );
+          if (paid && owesTotal > 0) unpaid = 0;
         }
 
         return {
           ...group,
           my_role: m.role,
           my_owes: unpaid,
+          my_share: payTotal,
           my_currency: currency,
-          my_paid: paid && payTotal > 0,
+          my_paid: paid && (owesTotal > 0 || isBillPayer),
+          my_is_bill_payer: isBillPayer,
           my_receipts: pay?.receipts ?? [],
         };
       })

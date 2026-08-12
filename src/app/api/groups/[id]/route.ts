@@ -21,6 +21,7 @@ import {
   type ItemSplitMode,
 } from "@/lib/splits";
 import { normalizeSubItems } from "@/lib/receipt-sub-items";
+import { resolveReceiptPayerMemberId } from "@/lib/group-member-payments";
 import { groupInviteUrlFromRequest } from "@/lib/signup-invite-url";
 
 type Params = { params: Promise<{ id: string }> };
@@ -226,6 +227,8 @@ export async function GET(req: Request, { params }: Params) {
         notes: r.notes,
         created_at: r.created_at,
         created_by: r.created_by,
+        paid_by_member_id:
+          (r as { paid_by_member_id?: string | null }).paid_by_member_id ?? null,
         uploaded_by:
           profile?.full_name || profile?.username || "Member",
         has_image: (r.receipt_images?.length ?? 0) > 0,
@@ -294,6 +297,8 @@ export async function GET(req: Request, { params }: Params) {
       string,
       {
         total: number;
+        owes: number;
+        is_bill_payer: boolean;
         currency: string;
         items: Array<{
           name: string;
@@ -306,8 +311,19 @@ export async function GET(req: Request, { params }: Params) {
     >();
 
     for (const mid of memberIds) {
-      memberPayAcc.set(mid, { total: 0, currency: "PHP", items: [] });
+      memberPayAcc.set(mid, {
+        total: 0,
+        owes: 0,
+        is_bill_payer: false,
+        currency: "PHP",
+        items: [],
+      });
     }
+
+    const defaultPayerMemberId =
+      (members ?? []).find((m) => m.role === "owner")?.id ??
+      (members ?? []).find((m) => m.user_id === group.created_by)?.id ??
+      null;
 
     const subItemsByItemId = new Map<string, ReturnType<typeof normalizeSubItems>>();
     for (const r of detailed) {
@@ -320,6 +336,10 @@ export async function GET(req: Request, { params }: Params) {
     }
 
     for (const r of detailed) {
+      const paidBy = resolveReceiptPayerMemberId(
+        (r as { paid_by_member_id?: string | null }).paid_by_member_id,
+        defaultPayerMemberId
+      );
       const splitItems: ItemSplitInput[] = r.items.map((item) => {
         const asg = assignmentsByItem.get(item.id) ?? [];
         const assignmentInputs: AssignmentInput[] = asg.map((a) => ({
@@ -360,6 +380,11 @@ export async function GET(req: Request, { params }: Params) {
         if (!acc) continue;
         acc.currency = currency;
         acc.total = moneyNumber(acc.total + share.total);
+        if (paidBy && paidBy === share.memberId) {
+          acc.is_bill_payer = true;
+        } else if (share.total > 0) {
+          acc.owes = moneyNumber(acc.owes + share.total);
+        }
         for (const line of share.lines) {
           const asg = (assignmentsByItem.get(line.itemId) ?? []).find(
             (a) => a.member_id === share.memberId
@@ -386,6 +411,8 @@ export async function GET(req: Request, { params }: Params) {
       return {
         member_id: mid,
         total: moneyNumber(acc.total),
+        owes: moneyNumber(acc.owes),
+        is_bill_payer: acc.is_bill_payer,
         currency: acc.currency,
         items: acc.items,
       };
@@ -417,6 +444,8 @@ export async function GET(req: Request, { params }: Params) {
           }
           return {
             total: mine.total,
+            owes: mine.owes,
+            is_bill_payer: mine.is_bill_payer,
             currency: mine.currency,
             receipts: [...byMerchant.values()].map((row, i) => ({
               receipt_id: `agg-${i}`,
@@ -597,6 +626,7 @@ export async function GET(req: Request, { params }: Params) {
       validated_at: string | null;
       rejection_reason: string | null;
       manual: boolean;
+      bill_payer: boolean;
     }> = [];
     {
       const proofsQuery = await supabase
@@ -617,6 +647,7 @@ export async function GET(req: Request, { params }: Params) {
             validated_at: p.validated_at,
             rejection_reason: p.rejection_reason,
             manual: raw?.source === "manual",
+            bill_payer: raw?.source === "bill_payer",
           };
         });
         // Managers always see all proofs so they can mark paid; others follow visibility
@@ -718,8 +749,26 @@ export async function DELETE(_req: Request, { params }: Params) {
   try {
     const auth = await getAuthedClient();
     if (!auth) return unauthorized();
-    const { supabase } = auth;
+    const { supabase, user } = auth;
     const { id } = await params;
+
+    const { data: group } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (!group) return notFound("Group not found");
+
+    const { data: me } = await supabase
+      .from("group_members")
+      .select("role")
+      .eq("group_id", id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (me?.role !== "owner") {
+      return fail("Only the group owner can delete this group", 403);
+    }
 
     const { error } = await supabase.from("groups").delete().eq("id", id);
     if (error) return fail(error.message, 400);
