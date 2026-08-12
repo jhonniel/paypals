@@ -22,6 +22,7 @@ import {
   navItemVariants,
   navListVariants,
 } from "@/components/layout/nav-draw-icon";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -53,13 +54,13 @@ export function AppSidebar({
 
   return (
     <aside className="flex h-full w-full flex-col bg-sidebar px-3 py-4 backdrop-blur-xl lg:border-r lg:border-border lg:py-5">
-      <Link
+      <BrandWordmark
         href="/dashboard"
         onClick={onNavigate}
-        className="mb-6 hidden px-3 font-[family-name:var(--font-display)] text-2xl tracking-tight lg:mb-8 lg:block"
-      >
-        Paypals
-      </Link>
+        size="md"
+        className="mb-6 hidden px-3 lg:mb-8 lg:inline-flex"
+        replayKey="sidebar-brand"
+      />
 
       <motion.div
         initial={reduceMotion ? false : { opacity: 0, y: 8 }}

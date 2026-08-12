@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationsBell } from "@/features/notifications/notifications-bell";
+import { BrandWordmark } from "@/components/brand-wordmark";
 import type { Profile } from "@/types/database";
 
 export function AppTopbar({
@@ -61,12 +62,12 @@ export function AppTopbar({
         <Menu className="h-5 w-5" />
       </Button>
 
-      <Link
+      <BrandWordmark
         href="/dashboard"
-        className="shrink-0 font-[family-name:var(--font-display)] text-xl tracking-tight lg:hidden"
-      >
-        Paypals
-      </Link>
+        size="sm"
+        className="shrink-0 lg:hidden"
+        replayKey="topbar-brand"
+      />
 
       <button
         type="button"

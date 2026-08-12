@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 export function AuthShell({
   title,
@@ -13,12 +13,7 @@ export function AuthShell({
   return (
     <div className="gradient-mesh relative flex min-h-dvh flex-col overflow-x-hidden">
       <header className="flex items-center justify-between px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:py-5">
-        <Link
-          href="/"
-          className="font-[family-name:var(--font-display)] text-2xl tracking-tight"
-        >
-          Paypals
-        </Link>
+        <BrandWordmark href="/" size="md" replayKey="auth-brand" />
         <ThemeToggle compact />
       </header>
       <main className="flex flex-1 items-start justify-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] sm:items-center sm:pb-16">

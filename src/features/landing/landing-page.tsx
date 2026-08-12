@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BrandWordmark } from "@/components/brand-wordmark";
 
 const HeroScene = dynamic(
   () => import("@/features/landing/hero-scene").then((m) => m.HeroScene),
@@ -219,12 +220,12 @@ export function LandingPage() {
       {/* Header */}
       <header className="absolute inset-x-0 top-0 z-30 border-b border-transparent">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6 md:px-8 md:py-4">
-          <Link
+          <BrandWordmark
             href="/"
-            className="font-[family-name:var(--font-display)] text-xl tracking-tight sm:text-2xl"
-          >
-            Paypals
-          </Link>
+            size="sm"
+            className="sm:text-2xl"
+            replayKey="landing-header"
+          />
           <nav className="hidden items-center gap-7 text-sm text-muted-foreground lg:flex">
             <a href="#problem" className="hover:text-foreground">
               Why Paypals
@@ -263,9 +264,11 @@ export function LandingPage() {
             transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
             className="max-w-xl"
           >
-            <p className="font-[family-name:var(--font-display)] text-[clamp(3rem,11vw,4.75rem)] leading-[0.92] tracking-tight text-foreground [text-shadow:0_2px_24px_rgba(0,0,0,0.55)]">
-              Paypals
-            </p>
+            <BrandWordmark
+              size="hero"
+              className="text-foreground [text-shadow:0_2px_24px_rgba(0,0,0,0.55)]"
+              replayKey="landing-hero"
+            />
             <h1 className="mt-5 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl [text-shadow:0_2px_18px_rgba(0,0,0,0.5)]">
               Split every receipt — fairly, fast, in pesos.
             </h1>
