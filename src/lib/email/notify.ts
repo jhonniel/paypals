@@ -148,7 +148,7 @@ export async function notifyAccessRequest(opts: {
   });
 }
 
-/** Email one or more signup invite codes to a recipient. */
+/** Email one or more unique signup invite links to a recipient. */
 export async function sendSignupInviteEmail(opts: {
   to: string;
   codes: string[];
@@ -161,46 +161,48 @@ export async function sendSignupInviteEmail(opts: {
     return { sent: false, error: "No invite codes" };
   }
 
-  const signupUrl = `${appUrl()}/signup`;
-  const primary = codes[0];
-  const signupWithInvite =
-    codes.length === 1
-      ? `${signupUrl}?invite=${encodeURIComponent(primary)}`
-      : signupUrl;
+  const { signupInviteUrl } = await import("@/lib/signup-invite-url");
+  const links = codes.map((c) => signupInviteUrl(c));
+  const primaryLink = links[0];
 
   const subject =
     codes.length === 1
       ? "You're invited to Paypals"
-      : `You're invited to Paypals (${codes.length} codes)`;
+      : `You're invited to Paypals (${codes.length} unique links)`;
 
   const text = [
     "You're invited to Paypals — an invite-only receipt splitter.",
     opts.fromName ? `From: ${opts.fromName}` : null,
     opts.label ? `Note: ${opts.label}` : null,
     "",
-    codes.length === 1 ? "Your invite code:" : "Your invite codes (each works once):",
-    ...codes.map((c) => `  • ${c}`),
+    codes.length === 1
+      ? "Your unique invite link (works once):"
+      : "Your unique invite links (each works once):",
+    ...links.map((url, i) => `  ${i + 1}. ${url}`),
     "",
-    `Sign up here: ${signupWithInvite}`,
-    "",
-    "Use Google or email on the signup page with your invite code.",
+    "Open your link, then sign up with Google or email.",
     "Ask Ygay if you need help.",
   ]
     .filter(Boolean)
     .join("\n");
 
-  const codeBoxes = codes
+  const linkBoxes = links
     .map(
-      (c) => `
-      <div style="margin:10px 0;padding:14px 16px;background:#f4f8f6;border:1px dashed #0d7a62;border-radius:12px;text-align:center">
-        <p style="margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#5a6b64">Invite code</p>
-        <p style="margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:22px;font-weight:700;letter-spacing:0.12em;color:#0c1210">${escapeHtml(c)}</p>
+      (url, i) => `
+      <div style="margin:10px 0;padding:14px 16px;background:#f4f8f6;border:1px dashed #0d7a62;border-radius:12px">
+        <p style="margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#5a6b64">
+          Invite link${codes.length > 1 ? ` ${i + 1}` : ""}
+        </p>
+        <p style="margin:0;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;font-weight:600;color:#0c1210">
+          <a href="${escapeHtml(url)}" style="color:#0d7a62;text-decoration:none">${escapeHtml(url)}</a>
+        </p>
+        <p style="margin:8px 0 0;font-size:12px;color:#5a6b64">Code: <strong>${escapeHtml(codes[i])}</strong></p>
       </div>`
     )
     .join("");
 
   const html = emailShell({
-    preheader: `Your Paypals invite code${codes.length > 1 ? "s are" : " is"} ready`,
+    preheader: `Your unique Paypals invite link${codes.length > 1 ? "s are" : " is"} ready`,
     title: "You're invited",
     bodyHtml: `
       <p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:#24302c">
@@ -213,16 +215,17 @@ export async function sendSignupInviteEmail(opts: {
           : ""
       }
       <p style="margin:16px 0 8px;font-size:14px;color:#24302c">
-        ${codes.length === 1 ? "Use this one-time code to create your account:" : "Each code works once — pick one to sign up:"}
+        ${
+          codes.length === 1
+            ? "Open this one-time link to create your account:"
+            : "Each link is unique and works once — open any one to sign up:"
+        }
       </p>
-      ${codeBoxes}
-      <p style="margin:16px 0 0;font-size:14px;line-height:1.55;color:#24302c">
-        Open the link below, enter the code (or use Google signup with the same invite), then you’re in.
-      </p>
+      ${linkBoxes}
     `,
     ctaLabel: "Accept invite & sign up",
-    ctaHref: signupWithInvite,
-    footerNote: "This invite is for you only. Ask Ygay if you need a new code.",
+    ctaHref: primaryLink,
+    footerNote: "Each invite link is unique and works once. Ask Ygay if you need a new one.",
   });
 
   return sendEmail({ to, subject, text, html });

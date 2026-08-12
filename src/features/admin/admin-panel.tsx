@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Activity,
   Flag,
+  Link2,
   Loader2,
   Receipt,
   Shield,
@@ -20,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPHP } from "@/lib/money";
+import { signupInviteUrl } from "@/lib/signup-invite-url";
 import { formatDistanceToNow } from "date-fns";
 
 type AdminData = {
@@ -90,6 +92,7 @@ export function AdminPanelView() {
   const [inviteSendTo, setInviteSendTo] = useState("");
   const [lastCreatedCode, setLastCreatedCode] = useState<string | null>(null);
   const [lastCreatedCodes, setLastCreatedCodes] = useState<string[]>([]);
+  const [lastCreatedUrls, setLastCreatedUrls] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -116,6 +119,7 @@ export function AdminPanelView() {
         use_count: number;
         enabled: boolean;
         expires_at: string | null;
+        invite_url?: string;
       }>;
     },
     enabled: !isLoading && !error,
@@ -222,12 +226,20 @@ export function AdminPanelView() {
             ? [json.data.code as string]
             : [];
 
+      const urls: string[] =
+        Array.isArray(json.data?.urls)
+          ? (json.data.urls as string[])
+          : json.data?.invite_url
+            ? [json.data.invite_url as string]
+            : codes.map((c) => signupInviteUrl(c));
+
       setLastCreatedCodes(codes);
+      setLastCreatedUrls(urls);
       setLastCreatedCode(codes[0] ?? null);
       setInviteLabel("");
       setInviteSendTo("");
-      if (codes.length) {
-        await navigator.clipboard.writeText(codes.join("\n")).catch(() => null);
+      if (urls.length) {
+        await navigator.clipboard.writeText(urls.join("\n")).catch(() => null);
       }
 
       const emailed = json.data?.emailed as
@@ -237,20 +249,20 @@ export function AdminPanelView() {
       if (emailed?.sent) {
         toast.success(
           count === 1
-            ? `Invite ${codes[0]} created and emailed`
-            : `${codes.length} invites created and emailed`
+            ? "Invite link created and emailed"
+            : `${codes.length} unique invite links created and emailed`
         );
       } else if (emailed && emailed.sent === false) {
         toast.success(
           count === 1
-            ? `Invite ${codes[0]} created (email failed: ${emailed.error ?? "SMTP"})`
-            : `${codes.length} invites created (email failed)`
+            ? `Invite link created (email failed: ${emailed.error ?? "SMTP"})`
+            : `${codes.length} invite links created (email failed)`
         );
       } else {
         toast.success(
           count === 1
-            ? `Invite ${codes[0]} created (copied)`
-            : `${codes.length} invites created (all codes copied)`
+            ? "Invite link created (copied)"
+            : `${codes.length} unique invite links created (copied)`
         );
       }
       void refetchInvites();
@@ -416,8 +428,8 @@ export function AdminPanelView() {
             <CardHeader>
               <CardTitle className="text-base">Signup invites</CardTitle>
               <CardDescription>
-                Each code is unique and works once. After someone signs up with it, it
-                can’t be reused. Group invite codes are separate — they only join a group.
+                Each invite has a unique one-time link (and code). Share the link —
+                after someone signs up, it can’t be reused. Group invites are separate.
               </CardDescription>
             </CardHeader>
             <CardContent className="divide-y divide-border p-0">
@@ -426,33 +438,52 @@ export function AdminPanelView() {
               ) : (
                 (signupInvites ?? []).map((inv) => {
                   const used = inv.use_count >= (inv.max_uses ?? 1) || !inv.enabled;
+                  const url = inv.invite_url || signupInviteUrl(inv.code);
                   return (
                     <div
                       key={inv.id}
                       className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-mono text-sm font-semibold tracking-wide">
                           {inv.code}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {url}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
                           {inv.label || "Untitled"} ·{" "}
                           {used ? "Used" : "Unused · single use"}
                         </p>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="default"
+                          disabled={used}
+                          onClick={() => {
+                            void navigator.clipboard.writeText(url).then(
+                              () => toast.success("Invite link copied"),
+                              () => toast.error("Could not copy")
+                            );
+                          }}
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          Copy link
+                        </Button>
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
                           onClick={() => {
                             void navigator.clipboard.writeText(inv.code).then(
-                              () => toast.success("Copied"),
+                              () => toast.success("Code copied"),
                               () => toast.error("Could not copy")
                             );
                           }}
                         >
-                          Copy
+                          Copy code
                         </Button>
                         <span className="text-xs text-muted-foreground">Enabled</span>
                         <Switch
@@ -471,8 +502,8 @@ export function AdminPanelView() {
             <CardHeader>
               <CardTitle className="text-base">Create signup invites</CardTitle>
               <CardDescription>
-                Generate one or many unique single-use codes. Each code can only be
-                used once.
+                Generate unique single-use invite links. Each person gets their own
+                link — it only works once.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -488,7 +519,7 @@ export function AdminPanelView() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="invite-count">How many codes</Label>
+                    <Label htmlFor="invite-count">How many unique links</Label>
                     <Input
                       id="invite-count"
                       type="number"
@@ -500,12 +531,12 @@ export function AdminPanelView() {
                       }
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Up to 50 at a time
+                      Up to 50 at a time — each link is unique
                     </p>
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="invite-send-to">Email codes to (optional)</Label>
+                  <Label htmlFor="invite-send-to">Email link(s) to (optional)</Label>
                   <Input
                     id="invite-send-to"
                     type="email"
@@ -514,14 +545,15 @@ export function AdminPanelView() {
                     placeholder="friend@email.com"
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Requires SMTP env vars. Sends the invite code(s) so they can sign up.
+                    Requires SMTP env vars. Sends unique invite link(s) so they can
+                    sign up.
                   </p>
                 </div>
-                {lastCreatedCodes.length > 1 ? (
+                {lastCreatedUrls.length > 1 ? (
                   <div className="space-y-2 rounded-lg bg-muted/50 px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-medium text-muted-foreground">
-                        Last batch ({lastCreatedCodes.length} codes)
+                        Last batch ({lastCreatedUrls.length} unique links)
                       </p>
                       <Button
                         type="button"
@@ -529,30 +561,52 @@ export function AdminPanelView() {
                         variant="outline"
                         onClick={() => {
                           void navigator.clipboard
-                            .writeText(lastCreatedCodes.join("\n"))
+                            .writeText(lastCreatedUrls.join("\n"))
                             .then(
-                              () => toast.success("All codes copied"),
+                              () => toast.success("All links copied"),
                               () => toast.error("Could not copy")
                             );
                         }}
                       >
-                        Copy all
+                        Copy all links
                       </Button>
                     </div>
-                    <pre className="max-h-40 overflow-y-auto font-mono text-xs font-semibold tracking-wide">
-                      {lastCreatedCodes.join("\n")}
+                    <pre className="max-h-40 overflow-y-auto break-all font-mono text-[11px] font-semibold leading-relaxed">
+                      {lastCreatedUrls.join("\n")}
                     </pre>
                   </div>
-                ) : lastCreatedCode ? (
-                  <p className="rounded-lg bg-muted/50 px-3 py-2 font-mono text-sm font-semibold tracking-wide">
-                    Last created: {lastCreatedCode}
-                  </p>
+                ) : lastCreatedUrls[0] || lastCreatedCode ? (
+                  <div className="space-y-1.5 rounded-lg bg-muted/50 px-3 py-2">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Last created link
+                    </p>
+                    <p className="break-all font-mono text-xs font-semibold">
+                      {lastCreatedUrls[0] || signupInviteUrl(lastCreatedCode!)}
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const url =
+                          lastCreatedUrls[0] ||
+                          signupInviteUrl(lastCreatedCode!);
+                        void navigator.clipboard.writeText(url).then(
+                          () => toast.success("Invite link copied"),
+                          () => toast.error("Could not copy")
+                        );
+                      }}
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                      Copy link
+                    </Button>
+                  </div>
                 ) : null}
                 <Button type="submit" disabled={busy}>
                   {busy && <Loader2 className="animate-spin" />}
                   {inviteCount > 1
-                    ? `Generate ${inviteCount} invites`
-                    : "Generate invite"}
+                    ? `Generate ${inviteCount} unique links`
+                    : "Generate invite link"}
                 </Button>
               </form>
             </CardContent>

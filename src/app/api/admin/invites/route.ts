@@ -3,6 +3,14 @@ import { getAdminClient, writeAuditLog } from "@/lib/supabase/auth";
 import { ok, forbidden, fail, fromZod, serverError, created } from "@/lib/api";
 import { sendSignupInviteEmail } from "@/lib/email/notify";
 import { isSmtpConfigured } from "@/lib/email/smtp";
+import { signupInviteUrl } from "@/lib/signup-invite-url";
+
+function withInviteUrls<T extends { code: string }>(rows: T[]) {
+  return rows.map((row) => ({
+    ...row,
+    invite_url: signupInviteUrl(row.code),
+  }));
+}
 
 export async function GET() {
   try {
@@ -15,14 +23,15 @@ export async function GET() {
       .order("created_at", { ascending: false });
 
     if (error) return fail(error.message, 400);
-    return ok(data ?? []);
+    return ok(withInviteUrls(data ?? []));
   } catch (e) {
     console.error(e);
     return serverError();
   }
 }
 
-function generateInviteCode(length = 10): string {
+/** Unique invite codes — longer alphabet reduces collision risk for shareable links. */
+function generateInviteCode(length = 12): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
@@ -104,7 +113,7 @@ export async function POST(request: Request) {
       return fail(error.message, 400);
     }
 
-    const createdRows = data ?? [];
+    const createdRows = withInviteUrls(data ?? []);
     await writeAuditLog(supabase, "create_signup_invite", "signup_invite", null, {
       count: createdRows.length,
       codes: createdRows.map((r) => r.code),
@@ -139,6 +148,7 @@ export async function POST(request: Request) {
       count: createdRows.length,
       invites: createdRows,
       codes: createdRows.map((r) => r.code),
+      urls: createdRows.map((r) => r.invite_url),
       emailed,
     });
   } catch (e) {
