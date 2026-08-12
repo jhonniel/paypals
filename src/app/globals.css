@@ -402,6 +402,50 @@ canvas {
   }
 }
 
+/* Notification popover — speech-bubble pop from the bell */
+@keyframes notification-bubble-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.55) translateY(-10px);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.06) translateY(3px);
+  }
+  78% {
+    transform: scale(0.98) translateY(-1px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes notification-bubble-out {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.82) translateY(-8px);
+  }
+}
+
+.notification-bubble[data-state="open"] {
+  animation: notification-bubble-in 0.42s cubic-bezier(0.22, 1.25, 0.36, 1) forwards;
+  transform-origin: var(--radix-popover-content-transform-origin);
+}
+
+.notification-bubble[data-state="closed"] {
+  animation: notification-bubble-out 0.18s cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
+  transform-origin: var(--radix-popover-content-transform-origin);
+}
+
+.notification-bubble-arrow[data-state="open"] {
+  animation: notification-bubble-arrow-in 0.28s cubic-bezier(0.22, 1.2, 0.36, 1) 0.06s both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .receipt-scan-beam,
   .receipt-scan-corner {
@@ -411,6 +455,11 @@ canvas {
   .receipt-scan-beam {
     top: 42%;
     opacity: 0.85;
+  }
+
+  .notification-bubble[data-state="open"],
+  .notification-bubble[data-state="closed"] {
+    animation: none !important;
   }
 
   .nav-draw-icon svg *,

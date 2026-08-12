@@ -71,7 +71,7 @@ export function NotificationsBell({ userId }: { userId: string | null }) {
         <Popover.Content
           align="end"
           side="bottom"
-          sideOffset={8}
+          sideOffset={10}
           collisionPadding={{
             top: 12,
             right: 12,
@@ -80,12 +80,7 @@ export function NotificationsBell({ userId }: { userId: string | null }) {
           }}
           avoidCollisions
           className={cn(
-            "z-[100] flex w-[min(calc(100vw-1.5rem),22rem)] max-h-[min(70dvh,24rem)] flex-col overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-2xl",
-            "origin-[var(--radix-popover-content-transform-origin)]",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out",
-            "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-            "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-            "data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2"
+            "notification-bubble z-[100] flex w-[min(calc(100vw-1.5rem),22rem)] max-h-[min(70dvh,24rem)] flex-col overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-[0_16px_40px_-12px_rgba(0,0,0,0.35)] dark:shadow-[0_16px_40px_-12px_rgba(0,0,0,0.65)]"
           )}
         >
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
