@@ -31,6 +31,16 @@ export async function GET() {
         const group = Array.isArray(g) ? g[0] : g;
         if (!group) return null;
 
+        const groupRow = group as {
+          id: string;
+          name: string;
+          description: string | null;
+          photo_url: string | null;
+          invite_code: string;
+          created_by: string;
+          created_at: string;
+        };
+
         const { data: groupMembers } = await supabase
           .from("group_members")
           .select("id")
@@ -73,7 +83,7 @@ export async function GET() {
         }
 
         return {
-          ...group,
+          ...groupRow,
           my_role: m.role,
           my_joined_at: m.joined_at,
           my_owes: unpaid,
@@ -87,14 +97,10 @@ export async function GET() {
     );
 
     const sorted = groups
-      .filter(Boolean)
+      .filter((g): g is NonNullable<typeof g> => g != null)
       .sort((a, b) => {
-        const aTime = new Date(
-          String(a?.my_joined_at ?? a?.created_at ?? 0)
-        ).getTime();
-        const bTime = new Date(
-          String(b?.my_joined_at ?? b?.created_at ?? 0)
-        ).getTime();
+        const aTime = new Date(String(a.my_joined_at ?? a.created_at ?? 0)).getTime();
+        const bTime = new Date(String(b.my_joined_at ?? b.created_at ?? 0)).getTime();
         return bTime - aTime;
       });
 
