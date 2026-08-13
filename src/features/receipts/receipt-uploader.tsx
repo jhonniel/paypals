@@ -491,7 +491,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
                     <img
                       src={receipt.previewUrl}
                       alt=""
-                      className="h-full w-full object-cover"
+                      className="max-h-full max-w-full object-contain"
                     />
                   ) : (
                     <FileImage className="h-4 w-4 text-muted-foreground" />

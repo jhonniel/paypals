@@ -39,7 +39,7 @@ export class OcrSpaceProvider implements OcrProvider {
       form.append("OCREngine", engine);
       form.append("scale", "true");
       form.append("detectOrientation", "true");
-      form.append("isTable", "true");
+      form.append("isTable", "false");
 
       const res = await fetch("https://api.ocr.space/parse/image", {
         method: "POST",

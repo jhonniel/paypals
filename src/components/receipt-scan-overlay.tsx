@@ -57,10 +57,10 @@ export function ReceiptScanOverlay({
         >
           <div
             className={cn(
-              "receipt-scan-frame relative overflow-hidden rounded-2xl border border-primary/35 bg-card shadow-[0_0_0_1px_color-mix(in_oklab,var(--primary)_20%,transparent),0_12px_40px_var(--glow)]",
+              "receipt-scan-frame relative flex items-center justify-center overflow-hidden rounded-2xl border border-primary/35 bg-muted/30 shadow-[0_0_0_1px_color-mix(in_oklab,var(--primary)_20%,transparent),0_12px_40px_var(--glow)]",
               compact
                 ? "h-40 w-[min(100%,14rem)]"
-                : "h-[min(52vh,22rem)] w-[min(100%,16rem)] sm:h-[min(56vh,26rem)] sm:w-[min(100%,18rem)]"
+                : "h-[min(70vh,32rem)] w-[min(100%,22rem)] sm:w-[min(100%,26rem)]"
             )}
           >
             {previewUrl ? (
@@ -68,7 +68,7 @@ export function ReceiptScanOverlay({
               <img
                 src={previewUrl}
                 alt=""
-                className="h-full w-full object-cover opacity-70"
+                className="max-h-full max-w-full object-contain opacity-80"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center bg-muted/40">

@@ -4,21 +4,35 @@ import {
   compressForOcr,
   preprocessReceiptImage,
 } from "@/services/ocr/preprocess-image";
+import { combineOcrPasses } from "@/services/ocr/merge-ocr-results";
 
 export type OcrRunMeta = {
   preprocessSteps: string[];
   enhanced: boolean;
   usedBinaryPass: boolean;
-  pass: "original" | "enhanced";
+  pass: "original" | "enhanced" | "merged";
 };
 
 function hasUsefulData(result: OcrResult): boolean {
   return result.items.length > 0 || result.total != null;
 }
 
+async function runOcrPass(
+  ocr: ReturnType<typeof getOcrService>,
+  buffer: Buffer,
+  mimeType: string,
+  fileName: string
+): Promise<OcrResult> {
+  return ocr.extract({
+    buffer,
+    mimeType,
+    fileName,
+  });
+}
+
 /**
- * OCR the receipt. Tries the original (compressed) image first, then an
- * enhanced pass only if needed. Never invents demo/Jollibee data.
+ * OCR the full receipt image. Always runs original + enhanced passes and merges
+ * results so line items from the whole photo are captured when possible.
  */
 export async function extractWithPreprocess(
   buffer: Buffer,
@@ -28,53 +42,71 @@ export async function extractWithPreprocess(
 ): Promise<{ result: OcrResult; meta: OcrRunMeta }> {
   const ocr = getOcrService(provider);
   const errors: string[] = [];
+  const baseName = fileName ?? "receipt.jpg";
 
-  // Pass 1: original photo (compressed for API size limits)
   const original = await compressForOcr(buffer, mimeType);
+  let originalResult: OcrResult | null = null;
   try {
-    const result = await ocr.extract({
-      buffer: original.buffer,
-      mimeType: original.mimeType,
-      fileName: fileName ?? "receipt.jpg",
-    });
-    if (hasUsefulData(result)) {
-      return {
-        result,
-        meta: {
-          preprocessSteps: ["original"],
-          enhanced: false,
-          usedBinaryPass: false,
-          pass: "original",
-        },
-      };
-    }
-    errors.push("Original pass found no line items");
+    originalResult = await runOcrPass(
+      ocr,
+      original.buffer,
+      original.mimeType,
+      baseName
+    );
   } catch (err) {
     errors.push(err instanceof Error ? err.message : "Original OCR failed");
   }
 
-  // Pass 2: enhanced grayscale/contrast
   const pre = await preprocessReceiptImage(buffer, mimeType);
+  let enhancedResult: OcrResult | null = null;
   try {
-    const result = await ocr.extract({
-      buffer: pre.buffer,
-      mimeType: pre.mimeType,
-      fileName: (fileName?.replace(/\.\w+$/, "") ?? "receipt") + "-enhanced.jpg",
-    });
-    if (hasUsefulData(result)) {
+    enhancedResult = await runOcrPass(
+      ocr,
+      pre.buffer,
+      pre.mimeType,
+      baseName.replace(/\.\w+$/, "") + "-enhanced.jpg"
+    );
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : "Enhanced OCR failed");
+  }
+
+  if (originalResult && enhancedResult) {
+    const merged = combineOcrPasses(originalResult, enhancedResult);
+    if (hasUsefulData(merged)) {
       return {
-        result,
+        result: merged,
         meta: {
-          preprocessSteps: pre.steps,
+          preprocessSteps: ["original", ...pre.steps],
           enhanced: pre.enhanced,
           usedBinaryPass: false,
-          pass: "enhanced",
+          pass: "merged",
         },
       };
     }
-    errors.push("Enhanced pass found no line items");
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : "Enhanced OCR failed");
+  }
+
+  if (originalResult && hasUsefulData(originalResult)) {
+    return {
+      result: originalResult,
+      meta: {
+        preprocessSteps: ["original"],
+        enhanced: false,
+        usedBinaryPass: false,
+        pass: "original",
+      },
+    };
+  }
+
+  if (enhancedResult && hasUsefulData(enhancedResult)) {
+    return {
+      result: enhancedResult,
+      meta: {
+        preprocessSteps: pre.steps,
+        enhanced: pre.enhanced,
+        usedBinaryPass: false,
+        pass: "enhanced",
+      },
+    };
   }
 
   throw new Error(errors.filter(Boolean).join(" · ") || "OCR failed");
