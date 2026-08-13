@@ -19,5 +19,5 @@ export default async function AdminPage() {
     redirect("/dashboard");
   }
 
-  return <AdminPanelView />;
+  return <AdminPanelView currentUserId={user.id} />;
 }

@@ -8,8 +8,10 @@ import {
   Flag,
   Link2,
   Loader2,
+  Pencil,
   Receipt,
   Shield,
+  Trash2,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -83,7 +85,7 @@ type AdminData = {
   }>;
 };
 
-export function AdminPanelView() {
+export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
   const qc = useQueryClient();
   const [newKey, setNewKey] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -94,6 +96,8 @@ export function AdminPanelView() {
   const [lastCreatedCodes, setLastCreatedCodes] = useState<string[]>([]);
   const [lastCreatedUrls, setLastCreatedUrls] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [renamingUserId, setRenamingUserId] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["admin"],
@@ -124,6 +128,63 @@ export function AdminPanelView() {
     },
     enabled: !isLoading && !error,
   });
+
+  async function renameUser(user: AdminData["users"][number]) {
+    const current = user.full_name || user.username || user.email || "";
+    const next = window.prompt("Display name", current)?.trim();
+    if (!next || next === current) return;
+
+    setRenamingUserId(user.id);
+    void qc.setQueryData<AdminData>(["admin"], (prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        users: prev.users.map((u) =>
+          u.id === user.id ? { ...u, full_name: next } : u
+        ),
+      };
+    });
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ full_name: next }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Rename failed");
+      toast.success("Name updated");
+      await qc.invalidateQueries({ queryKey: ["admin"] });
+    } catch (err) {
+      await qc.invalidateQueries({ queryKey: ["admin"] });
+      toast.error(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setRenamingUserId(null);
+    }
+  }
+
+  async function deleteUser(user: AdminData["users"][number]) {
+    const label = user.full_name || user.username || user.email || "this user";
+    if (
+      !confirm(
+        `Permanently delete ${label}? Their receipts, owned groups, and account data will be removed. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingUserId(user.id);
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Delete failed");
+      toast.success("User deleted");
+      await qc.invalidateQueries({ queryKey: ["admin"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingUserId(null);
+    }
+  }
 
   async function toggleAdmin(userId: string, is_admin: boolean) {
     setBusy(true);
@@ -408,22 +469,56 @@ export function AdminPanelView() {
                   className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                      {u.full_name || u.username || u.email}
-                    </p>
+                    <div className="flex items-center gap-1">
+                      <p className="truncate text-sm font-medium">
+                        {u.full_name || u.username || u.email}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 shrink-0"
+                        disabled={busy || renamingUserId !== null || deletingUserId !== null}
+                        aria-label={`Rename ${u.full_name || u.username || u.email || "user"}`}
+                        onClick={() => void renameUser(u)}
+                      >
+                        {renamingUserId === u.id ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Pencil className="size-3.5" />
+                        )}
+                      </Button>
+                    </div>
                     <p className="truncate text-xs text-muted-foreground">{u.email}</p>
                     <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
                       {formatPHP(u.totalSpent ?? 0)} · {u.receiptCount ?? 0} receipt
                       {(u.receiptCount ?? 0) === 1 ? "" : "s"}
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <span className="text-xs text-muted-foreground">Admin</span>
                     <Switch
                       checked={u.is_admin}
-                      disabled={busy}
+                      disabled={busy || deletingUserId === u.id}
                       onCheckedChange={(v) => void toggleAdmin(u.id, v)}
                     />
+                    {u.id !== currentUserId ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 text-destructive hover:text-destructive"
+                        disabled={busy || deletingUserId !== null}
+                        aria-label={`Delete ${u.full_name || u.username || u.email || "user"}`}
+                        onClick={() => void deleteUser(u)}
+                      >
+                        {deletingUserId === u.id ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="size-4" />
+                        )}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               ))}
