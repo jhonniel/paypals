@@ -339,6 +339,26 @@ export function itemSplitModeLabel(
   return "One person only";
 }
 
+/** Per-person share for group or N-way splits; null when not applicable. */
+export function itemSplitPerPersonAmount(
+  itemTotal: number,
+  mode: ItemSplitMode | null | undefined,
+  splitN?: number | null,
+  groupSize?: number
+): number | null {
+  if (mode === "among_group") {
+    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
+    if (n <= 0) return null;
+    return moneyNumber(itemTotal / n);
+  }
+  if (mode === "among_n") {
+    const n = Math.max(1, Math.floor(Number(splitN) || 1));
+    if (n <= 1) return null;
+    return moneyNumber(itemTotal / n);
+  }
+  return null;
+}
+
 function ensureMember(
   memberMap: Map<string, MemberShare>,
   memberId: string

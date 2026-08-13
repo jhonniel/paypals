@@ -2,6 +2,11 @@ import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, notFound, fromZod, fail, serverError } from "@/lib/api";
 import { computeReceiptTotals } from "@/lib/money";
+import {
+  insertReceiptDiscounts,
+  normalizeDiscountRows,
+  sumDiscountAmount,
+} from "@/lib/receipt-discounts";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -24,7 +29,8 @@ export async function GET(_request: Request, { params }: Params) {
 
     const canEdit = receipt.created_by === user.id;
 
-    const [{ data: items }, { data: images }, { data: history }] = await Promise.all([
+    const [{ data: items }, { data: images }, { data: history }, discountsQuery] =
+      await Promise.all([
       supabase
         .from("receipt_items")
         .select("*")
@@ -36,7 +42,28 @@ export async function GET(_request: Request, { params }: Params) {
         .select("*")
         .eq("receipt_id", id)
         .order("created_at", { ascending: true }),
+      supabase
+        .from("receipt_discounts")
+        .select("*")
+        .eq("receipt_id", id)
+        .order("sort_order", { ascending: true }),
     ]);
+
+    const discountRows =
+      discountsQuery.error &&
+      /receipt_discounts|relation|column/i.test(discountsQuery.error.message)
+        ? []
+        : (discountsQuery.data ?? []);
+
+    const discounts = normalizeDiscountRows(
+      (discountRows ?? []).map((row) => ({
+        id: row.id,
+        label: row.label,
+        amount: Number(row.amount),
+        sort_order: row.sort_order,
+      })),
+      Number(receipt.discount)
+    );
 
     // Prefer proxy so group members can always view the image (not only the uploader)
     let imageUrl: string | null = null;
@@ -48,6 +75,7 @@ export async function GET(_request: Request, { params }: Params) {
     return ok({
       receipt,
       items: items ?? [],
+      discounts,
       images: images ?? [],
       history: history ?? [],
       imageUrl,
@@ -70,6 +98,11 @@ const itemSchema = z.object({
   split_n: z.number().int().min(1).max(99).nullable().optional(),
 });
 
+const discountSchema = z.object({
+  label: z.string().min(1).max(100),
+  amount: z.number().min(0),
+});
+
 const patchSchema = z.object({
   merchant: z.string().max(200).nullable().optional(),
   receipt_date: z.string().nullable().optional(),
@@ -78,6 +111,7 @@ const patchSchema = z.object({
   currency: z.string().length(3).optional(),
   tax: z.number().min(0).optional(),
   discount: z.number().min(0).optional(),
+  discounts: z.array(discountSchema).optional(),
   service_charge: z.number().min(0).optional(),
   tip: z.number().min(0).optional(),
   group_id: z.string().uuid().nullable().optional(),
@@ -115,7 +149,19 @@ export async function PATCH(request: Request, { params }: Params) {
 
     if (!existing) return notFound("Receipt not found");
 
-    const { items, ...fields } = parsed.data;
+    const { items, discounts, ...fields } = parsed.data;
+
+    let resolvedDiscountTotal: number | undefined;
+    if (discounts !== undefined) {
+      resolvedDiscountTotal = sumDiscountAmount(discounts);
+    } else if (fields.discount !== undefined) {
+      resolvedDiscountTotal = fields.discount;
+    }
+
+    if (discounts !== undefined) {
+      const { error: discountError } = await insertReceiptDiscounts(supabase, id, discounts);
+      if (discountError) return fail(discountError, 400);
+    }
 
     if (fields.group_id) {
       const { data: group } = await supabase
@@ -209,16 +255,41 @@ export async function PATCH(request: Request, { params }: Params) {
         }
       }
 
+      let discountForTotals = resolvedDiscountTotal;
+      let taxForTotals = fields.tax;
+      let serviceForTotals = fields.service_charge;
+      let tipForTotals = fields.tip;
+      if (
+        discountForTotals === undefined ||
+        taxForTotals === undefined ||
+        serviceForTotals === undefined ||
+        tipForTotals === undefined
+      ) {
+        const { data: currentReceipt } = await supabase
+          .from("receipts")
+          .select("tax, discount, service_charge, tip")
+          .eq("id", id)
+          .single();
+        if (discountForTotals === undefined) {
+          discountForTotals = Number(currentReceipt?.discount ?? 0);
+        }
+        if (taxForTotals === undefined) taxForTotals = Number(currentReceipt?.tax ?? 0);
+        if (serviceForTotals === undefined) {
+          serviceForTotals = Number(currentReceipt?.service_charge ?? 0);
+        }
+        if (tipForTotals === undefined) tipForTotals = Number(currentReceipt?.tip ?? 0);
+      }
+
       const computed = computeReceiptTotals({
         items: items.map((i) => ({
           quantity: i.quantity,
           unitPrice: i.unit_price,
           totalPrice: i.total_price,
         })),
-        tax: fields.tax,
-        discount: fields.discount,
-        serviceCharge: fields.service_charge,
-        tip: fields.tip,
+        tax: taxForTotals,
+        discount: discountForTotals,
+        serviceCharge: serviceForTotals,
+        tip: tipForTotals,
       });
 
       totalsUpdate = {
@@ -232,6 +303,7 @@ export async function PATCH(request: Request, { params }: Params) {
     } else if (
       fields.tax !== undefined ||
       fields.discount !== undefined ||
+      discounts !== undefined ||
       fields.service_charge !== undefined ||
       fields.tip !== undefined
     ) {
@@ -253,7 +325,7 @@ export async function PATCH(request: Request, { params }: Params) {
           totalPrice: Number(i.total_price),
         })),
         tax: fields.tax ?? Number(current?.tax ?? 0),
-        discount: fields.discount ?? Number(current?.discount ?? 0),
+        discount: resolvedDiscountTotal ?? Number(current?.discount ?? 0),
         serviceCharge: fields.service_charge ?? Number(current?.service_charge ?? 0),
         tip: fields.tip ?? Number(current?.tip ?? 0),
       });
@@ -300,7 +372,23 @@ export async function PATCH(request: Request, { params }: Params) {
       .eq("receipt_id", id)
       .order("sort_order", { ascending: true });
 
-    return ok({ receipt, items: savedItems ?? [] });
+    const { data: savedDiscounts } = await supabase
+      .from("receipt_discounts")
+      .select("*")
+      .eq("receipt_id", id)
+      .order("sort_order", { ascending: true });
+
+    const normalizedDiscounts = normalizeDiscountRows(
+      (savedDiscounts ?? []).map((row) => ({
+        id: row.id,
+        label: row.label,
+        amount: Number(row.amount),
+        sort_order: row.sort_order,
+      })),
+      Number(receipt.discount)
+    );
+
+    return ok({ receipt, items: savedItems ?? [], discounts: normalizedDiscounts });
   } catch (error) {
     console.error(error);
     return serverError();

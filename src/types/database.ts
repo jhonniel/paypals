@@ -121,6 +121,16 @@ export interface Receipt {
   finalized_at: string | null;
 }
 
+export interface ReceiptDiscount {
+  id: string;
+  receipt_id: string;
+  label: string;
+  amount: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ReceiptItem {
   id: string;
   receipt_id: string;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -38,6 +38,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
 import { publicEnv } from "@/lib/env";
+import { itemSplitPerPersonAmount } from "@/lib/splits";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
 import { readApiJson } from "@/lib/api-client";
 import {
@@ -79,6 +80,7 @@ type GroupReceipt = {
   discount: number;
   service_charge: number;
   tip: number;
+  discounts?: Array<{ label: string; amount: number }>;
   notes: string | null;
   created_at: string;
   created_by: string;
@@ -211,10 +213,12 @@ function GroupReceiptCard({
   receipt: r,
   onPickItems,
   showUnclaimed,
+  groupMemberCount = 0,
 }: {
   receipt: GroupReceipt;
   onPickItems?: () => void;
   showUnclaimed?: boolean;
+  groupMemberCount?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -343,12 +347,23 @@ function GroupReceiptCard({
                   : (item.claimed_by ?? []).join(", ");
               const isGroupSplit = item.split_mode === "among_group";
               const othersN = item.others_claim_count ?? 0;
+              const groupPerPerson =
+                isGroupSplit && groupMemberCount > 0
+                  ? itemSplitPerPersonAmount(
+                      Number(item.total_price),
+                      "among_group",
+                      null,
+                      groupMemberCount
+                    )
+                  : null;
 
               const ownerLine = showUnclaimed ? ownerItemClaimLine(item) : null;
               const claimLine = ownerLine
                 ? ownerLine.line
                 : isGroupSplit
-                  ? "Split with whole group"
+                  ? groupMemberCount > 0 && groupPerPerson != null
+                    ? `Split among ${groupMemberCount} · ${money(groupPerPerson, currency)}/each`
+                    : "Split with whole group"
                   : claimLabel
                     ? othersN > 0
                       ? "You claimed this · others also claimed"
@@ -404,10 +419,20 @@ function GroupReceiptCard({
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-2 border-t border-border pt-3">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground sm:grid-cols-[auto_auto]">
-          {Number(r.discount) > 0 && (
+          {(r.discounts?.length ? r.discounts : Number(r.discount) > 0 ? [{ label: "Discount", amount: Number(r.discount) }] : []).map(
+            (d) => (
+              <Fragment key={`${d.label}-${d.amount}`}>
+                <dt>{d.label}</dt>
+                <dd className="tabular-nums text-right sm:text-left">
+                  −{money(Number(d.amount), currency)}
+                </dd>
+              </Fragment>
+            )
+          )}
+          {Number(r.discount) > 0 && (r.discounts?.length ?? 0) > 1 && (
             <>
-              <dt>Discount</dt>
-              <dd className="tabular-nums text-right sm:text-left">
+              <dt className="font-medium text-foreground">Total discounts</dt>
+              <dd className="font-medium tabular-nums text-right text-foreground sm:text-left">
                 −{money(Number(r.discount), currency)}
               </dd>
             </>
@@ -995,6 +1020,7 @@ export function GroupDetailView({
               <GroupReceiptCard
                 key={r.id}
                 receipt={r}
+                groupMemberCount={data.member_count ?? data.members.length}
                 showUnclaimed={canManage}
                 onPickItems={
                   data.my_member_id

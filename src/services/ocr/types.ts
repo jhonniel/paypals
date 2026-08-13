@@ -19,6 +19,11 @@ export type OcrLineItem = {
   }>;
 };
 
+export type OcrDiscountLine = {
+  label: string;
+  amount: number;
+};
+
 export type OcrResult = {
   provider: OcrProviderName;
   merchant: string | null;
@@ -27,7 +32,9 @@ export type OcrResult = {
   items: OcrLineItem[];
   subtotal: number | null;
   tax: number | null;
+  /** Sum of all discount lines when multiple appear on the receipt */
   discount: number | null;
+  discountLines?: OcrDiscountLine[];
   serviceCharge: number | null;
   tip: number | null;
   total: number | null;

@@ -21,6 +21,7 @@ import {
   type ItemSplitMode,
 } from "@/lib/splits";
 import { normalizeSubItems } from "@/lib/receipt-sub-items";
+import { normalizeDiscountRows } from "@/lib/receipt-discounts";
 import { resolveReceiptPayerMemberId } from "@/lib/group-member-payments";
 import { groupInviteUrlFromRequest } from "@/lib/signup-invite-url";
 
@@ -78,6 +79,7 @@ export async function GET(req: Request, { params }: Params) {
            subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
            paid_by_member_id,
            receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n, sub_items),
+           receipt_discounts(id, label, amount, sort_order),
            receipt_images(id),
            profiles:created_by(full_name, username)`
         )
@@ -86,6 +88,24 @@ export async function GET(req: Request, { params }: Params) {
         .limit(50);
       receipts = first.data;
       receiptsError = first.error;
+    }
+
+    if (receiptsError && /receipt_discounts|column/i.test(receiptsError.message)) {
+      const withoutDiscountRows = await supabase
+        .from("receipts")
+        .select(
+          `id, merchant, total, currency, status, receipt_date, receipt_time,
+           subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
+           paid_by_member_id,
+           receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n, sub_items),
+           receipt_images(id),
+           profiles:created_by(full_name, username)`
+        )
+        .eq("group_id", id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      receipts = withoutDiscountRows.data;
+      receiptsError = withoutDiscountRows.error;
     }
 
     if (receiptsError && /sub_items|column/i.test(receiptsError.message)) {
@@ -113,6 +133,7 @@ export async function GET(req: Request, { params }: Params) {
           `id, merchant, total, currency, status, receipt_date, receipt_time,
            subtotal, tax, discount, service_charge, tip, notes, created_at, created_by,
            receipt_items(id, name, quantity, unit_price, total_price, sort_order, split_mode, split_n, sub_items),
+           receipt_discounts(id, label, amount, sort_order),
            receipt_images(id),
            profiles:created_by(full_name, username)`
         )
@@ -222,6 +243,17 @@ export async function GET(req: Request, { params }: Params) {
         subtotal: r.subtotal,
         tax: r.tax,
         discount: r.discount,
+        discounts: normalizeDiscountRows(
+          (r.receipt_discounts ?? []).map(
+            (d: { id?: string; label: string; amount: number; sort_order?: number }) => ({
+              id: d.id,
+              label: d.label,
+              amount: Number(d.amount),
+              sort_order: d.sort_order,
+            })
+          ),
+          Number(r.discount)
+        ).map((d) => ({ label: d.label, amount: d.amount })),
         service_charge: r.service_charge,
         tip: r.tip,
         notes: r.notes,

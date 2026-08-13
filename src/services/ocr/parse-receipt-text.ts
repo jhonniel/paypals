@@ -74,6 +74,14 @@ export function cleanItemName(raw: string): string {
   return name.slice(0, 120);
 }
 
+function extractDiscountLabel(line: string): string {
+  const cleaned = line
+    .replace(/[\d,.\s₱$€£¥₩₹]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (cleaned || "Discount").slice(0, 100);
+}
+
 function normalizeLine(line: string): string {
   return line
     .replace(/\t+/g, " ")
@@ -360,6 +368,7 @@ export function parseReceiptText(
   let subtotal: number | null = null;
   let tax: number | null = null;
   let discount: number | null = null;
+  const discountLines: Array<{ label: string; amount: number }> = [];
   let serviceCharge: number | null = null;
   let tip: number | null = null;
   let total: number | null = null;
@@ -411,10 +420,19 @@ export function parseReceiptText(
     } else if (TIP_RE.test(line)) {
       tip = amount;
     } else if (DISCOUNT_RE.test(line)) {
-      discount = amount;
+      discountLines.push({
+        label: extractDiscountLabel(line),
+        amount,
+      });
     } else if (SERVICE_RE.test(line)) {
       serviceCharge = amount;
     }
+  }
+
+  if (discountLines.length > 0) {
+    discount = moneyNumber(
+      discountLines.reduce((sum, row) => sum + row.amount, 0)
+    );
   }
 
   // Never carry tax into Paypals — amount due / item totals are enough
@@ -485,6 +503,7 @@ export function parseReceiptText(
     subtotal,
     tax,
     discount,
+    discountLines: discountLines.length ? discountLines : undefined,
     serviceCharge,
     tip,
     total,

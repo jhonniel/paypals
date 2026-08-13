@@ -16,7 +16,7 @@ export async function GET() {
     const { data: memberships, error } = await supabase
       .from("group_members")
       .select(
-        "id, role, group_id, groups(id, name, description, photo_url, invite_code, created_by, created_at)"
+        "id, role, group_id, joined_at, groups(id, name, description, photo_url, invite_code, created_by, created_at)"
       )
       .eq("user_id", user.id);
 
@@ -75,6 +75,7 @@ export async function GET() {
         return {
           ...group,
           my_role: m.role,
+          my_joined_at: m.joined_at,
           my_owes: unpaid,
           my_share: payTotal,
           my_currency: currency,
@@ -88,12 +89,12 @@ export async function GET() {
     const sorted = groups
       .filter(Boolean)
       .sort((a, b) => {
-        const aTime = a?.created_at
-          ? new Date(String(a.created_at)).getTime()
-          : 0;
-        const bTime = b?.created_at
-          ? new Date(String(b.created_at)).getTime()
-          : 0;
+        const aTime = new Date(
+          String(a?.my_joined_at ?? a?.created_at ?? 0)
+        ).getTime();
+        const bTime = new Date(
+          String(b?.my_joined_at ?? b?.created_at ?? 0)
+        ).getTime();
         return bTime - aTime;
       });
 

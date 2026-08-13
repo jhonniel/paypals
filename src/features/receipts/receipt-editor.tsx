@@ -23,6 +23,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { computeReceiptTotals, formatPHP, lineTotal, moneyNumber } from "@/lib/money";
+import { sumDiscountAmount } from "@/lib/receipt-discounts";
+import { itemSplitPerPersonAmount } from "@/lib/splits";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
 import { ReceiptScanOverlay } from "@/components/receipt-scan-overlay";
@@ -90,6 +92,13 @@ export type EditorItem = {
   sub_items?: ReceiptSubItem[];
 };
 
+export type EditorDiscount = {
+  key: string;
+  id?: string;
+  label: string;
+  amount: number;
+};
+
 type ReceiptPayload = {
   receipt: {
     id: string;
@@ -119,6 +128,12 @@ type ReceiptPayload = {
     split_n?: number | null;
     sub_items?: ReceiptSubItem[] | null;
   }>;
+  discounts?: Array<{
+    id?: string;
+    label: string;
+    amount: number;
+    sort_order?: number;
+  }>;
   imageUrl: string | null;
   canEdit: boolean;
 };
@@ -132,7 +147,7 @@ function buildEditorSnapshot(input: {
   date: string;
   time: string;
   notes: string;
-  discount: number;
+  discounts: EditorDiscount[];
   serviceCharge: number;
   tip: number;
   groupId: string | null;
@@ -143,7 +158,11 @@ function buildEditorSnapshot(input: {
     date: input.date,
     time: input.time,
     notes: input.notes,
-    discount: input.discount,
+    discounts: input.discounts.map((d) => ({
+      id: d.id ?? null,
+      label: d.label,
+      amount: d.amount,
+    })),
     serviceCharge: input.serviceCharge,
     tip: input.tip,
     groupId: input.groupId,
@@ -168,7 +187,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [notes, setNotes] = useState("");
-  const [discount, setDiscount] = useState(0);
+  const [discounts, setDiscounts] = useState<EditorDiscount[]>([]);
   const [serviceCharge, setServiceCharge] = useState(0);
   const [tip, setTip] = useState(0);
   const [currency, setCurrency] = useState("PHP");
@@ -199,7 +218,12 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       const nextDate = data.receipt.receipt_date ?? "";
       const nextTime = (data.receipt.receipt_time ?? "").slice(0, 5);
       const nextNotes = data.receipt.notes ?? "";
-      const nextDiscount = Number(data.receipt.discount);
+      const nextDiscounts: EditorDiscount[] = (data.discounts ?? []).map((d) => ({
+        key: d.id ?? uid(),
+        id: d.id,
+        label: d.label || "Discount",
+        amount: Number(d.amount),
+      }));
       const nextService = Number(data.receipt.service_charge);
       const nextTip = Number(data.receipt.tip);
       const nextItems: EditorItem[] = (data.items ?? []).map((i) => ({
@@ -218,7 +242,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       setDate(nextDate);
       setTime(nextTime);
       setNotes(nextNotes);
-      setDiscount(nextDiscount);
+      setDiscounts(nextDiscounts);
       setServiceCharge(nextService);
       setTip(nextTip);
       setItems(nextItems);
@@ -228,7 +252,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           date: nextDate,
           time: nextTime,
           notes: nextNotes,
-          discount: nextDiscount,
+          discounts: nextDiscounts,
           serviceCharge: nextService,
           tip: nextTip,
           groupId: data.receipt.group_id ?? null,
@@ -261,6 +285,34 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receiptId]);
 
+  useEffect(() => {
+    if (!groupId) {
+      setGroupSize(0);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/groups/${groupId}`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled) return;
+        const members = json?.data?.members;
+        if (Array.isArray(members)) {
+          setGroupSize(members.length);
+          return;
+        }
+        const count = json?.data?.member_count;
+        setGroupSize(typeof count === "number" ? count : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setGroupSize(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [groupId]);
+
+  const discountTotal = useMemo(() => sumDiscountAmount(discounts), [discounts]);
+
   const totals = useMemo(
     () =>
       computeReceiptTotals({
@@ -270,11 +322,11 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           totalPrice: i.total_price,
         })),
         tax: 0,
-        discount,
+        discount: discountTotal,
         serviceCharge,
         tip,
       }),
-    [items, discount, serviceCharge, tip]
+    [items, discountTotal, serviceCharge, tip]
   );
 
   const isDirty =
@@ -285,7 +337,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       date,
       time,
       notes,
-      discount,
+      discounts,
       serviceCharge,
       tip,
       groupId,
@@ -308,6 +360,23 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
       return rows.filter((g) => g.my_role === "owner");
     },
   });
+
+  function addDiscount() {
+    setDiscounts((prev) => [
+      ...prev,
+      { key: uid(), label: "Discount", amount: 0 },
+    ]);
+  }
+
+  function updateDiscount(key: string, patch: Partial<EditorDiscount>) {
+    setDiscounts((prev) =>
+      prev.map((row) => (row.key === key ? { ...row, ...patch } : row))
+    );
+  }
+
+  function removeDiscount(key: string) {
+    setDiscounts((prev) => prev.filter((row) => row.key !== key));
+  }
 
   function updateItem(key: string, patch: Partial<EditorItem>, recalc = true) {
     setItems((prev) =>
@@ -335,6 +404,10 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
         false
       );
     } else if (value === "group") {
+      if (!groupId) {
+        toast.error("Link a group first to use Group split");
+        return;
+      }
       updateItem(key, { split_mode: "among_group", split_n: null }, false);
     } else {
       updateItem(key, { split_mode: "among_claimers", split_n: null }, false);
@@ -427,7 +500,12 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           notes: notes || null,
           currency,
           tax: 0,
-          discount,
+          discounts: discounts
+            .filter((row) => row.label.trim() && row.amount > 0)
+            .map((row) => ({
+              label: row.label.trim(),
+              amount: row.amount,
+            })),
           service_charge: serviceCharge,
           tip,
           group_id: groupId,
@@ -456,7 +534,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           date,
           time,
           notes,
-          discount,
+          discounts,
           serviceCharge,
           tip,
           groupId,
@@ -483,7 +561,14 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
               split_n: i.split_n ?? 1,
               sub_items: normalizeSubItems(i.sub_items),
             }));
+            const nextDiscounts: EditorDiscount[] = (data.discounts ?? []).map((d) => ({
+              key: d.id ?? uid(),
+              id: d.id,
+              label: d.label || "Discount",
+              amount: Number(d.amount),
+            }));
             setItems(nextItems);
+            setDiscounts(nextDiscounts);
             setGroupId(data.receipt.group_id ?? null);
             setStatus(data.receipt.status);
             setSavedSnapshot(
@@ -492,7 +577,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                 date: data.receipt.receipt_date ?? "",
                 time: (data.receipt.receipt_time ?? "").slice(0, 5),
                 notes: data.receipt.notes ?? "",
-                discount: Number(data.receipt.discount),
+                discounts: nextDiscounts,
                 serviceCharge: Number(data.receipt.service_charge),
                 tip: Number(data.receipt.tip),
                 groupId: data.receipt.group_id ?? null,
@@ -679,12 +764,144 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           </Card>
 
           <Card>
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="text-base sm:text-lg">Totals & adjustments</CardTitle>
+              <CardDescription>
+                {canEdit
+                  ? "Add one or more discounts (promo, senior/PWD, etc.) — each is deducted from the amount due"
+                  : "From the uploaded receipt"}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 p-4 pt-0 sm:p-6 sm:pt-0 text-sm">
+              <Row
+                label="Items subtotal"
+                value={formatPHP(totals.itemsSubtotal, currency)}
+              />
+              {canEdit ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>Discounts</Label>
+                      <Button type="button" size="sm" variant="outline" onClick={addDiscount}>
+                        <Plus /> Add discount
+                      </Button>
+                    </div>
+                    {discounts.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+                        No discounts yet — add one for promos, senior/PWD, or other deductions.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {discounts.map((row) => (
+                          <div
+                            key={row.key}
+                            className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-[1fr_140px_auto]"
+                          >
+                            <div className="space-y-1.5">
+                              <Label className="sr-only">Discount label</Label>
+                              <Input
+                                value={row.label}
+                                onChange={(e) =>
+                                  updateDiscount(row.key, { label: e.target.value })
+                                }
+                                placeholder="e.g. Senior, Promo"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="sr-only">Discount amount</Label>
+                              <EditableNumber
+                                value={row.amount}
+                                min={0}
+                                onCommit={(amount) => updateDiscount(row.key, { amount })}
+                                aria-label={`${row.label} amount`}
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="shrink-0 self-end text-destructive hover:text-destructive"
+                              onClick={() => removeDiscount(row.key)}
+                              aria-label={`Remove ${row.label}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {discountTotal > 0 && (
+                      <Row
+                        label="Total discounts"
+                        value={`−${formatPHP(discountTotal, currency)}`}
+                      />
+                    )}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="receipt-service">Service charge</Label>
+                      <EditableNumber
+                        id="receipt-service"
+                        value={serviceCharge}
+                        min={0}
+                        onCommit={setServiceCharge}
+                        aria-label="Service charge amount"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="receipt-tip">Tip</Label>
+                      <EditableNumber
+                        id="receipt-tip"
+                        value={tip}
+                        min={0}
+                        onCommit={setTip}
+                        aria-label="Tip amount"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {discounts.map((row) => (
+                    <Row
+                      key={row.key}
+                      label={row.label}
+                      value={`−${formatPHP(row.amount, currency)}`}
+                    />
+                  ))}
+                  {discountTotal > 0 && discounts.length > 1 && (
+                    <Row
+                      label="Total discounts"
+                      value={`−${formatPHP(discountTotal, currency)}`}
+                    />
+                  )}
+                  {serviceCharge > 0 && (
+                    <Row
+                      label="Service"
+                      value={formatPHP(totals.serviceCharge, currency)}
+                    />
+                  )}
+                  {tip > 0 && (
+                    <Row label="Tip" value={formatPHP(totals.tip, currency)} />
+                  )}
+                </>
+              )}
+              <div className="flex items-center justify-between border-t border-border pt-3 text-base font-semibold">
+                <span>Amount due</span>
+                <span>{formatPHP(totals.total, currency)}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader className="flex flex-col gap-3 space-y-0 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
               <div>
                 <CardTitle className="text-base sm:text-lg">Line items</CardTitle>
                 <CardDescription>
                   {canEdit
-                    ? "Edit names, amounts, and how each item is split"
+                    ? groupId
+                      ? "Edit items and split — Group split divides each line equally among all members"
+                      : "Edit names, amounts, and how each item is split"
                     : "View only — the uploader manages line items"}
                 </CardDescription>
               </div>
@@ -844,34 +1061,45 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                     <option value="claimers">Claimers</option>
                                   </select>
                                   {mode === "among_n" && splitN > 1 && (
-                                    <>
-                                      <EditableNumber
-                                        value={splitN}
-                                        min={2}
-                                        onCommit={(n) =>
-                                          updateItem(
-                                            item.key,
-                                            {
-                                              split_mode: "among_n",
-                                              split_n: Math.min(99, n),
-                                            },
-                                            false
-                                          )
-                                        }
-                                        className="h-9 w-14 px-1.5 text-center tabular-nums"
-                                        aria-label="Number of ways"
-                                      />
-                                      <span className="text-[11px] text-muted-foreground">
-                                        {formatPHP(item.total_price / splitN, currency)}
-                                        /ea
-                                      </span>
-                                    </>
+                                    <EditableNumber
+                                      value={splitN}
+                                      min={2}
+                                      onCommit={(n) =>
+                                        updateItem(
+                                          item.key,
+                                          {
+                                            split_mode: "among_n",
+                                            split_n: Math.min(99, n),
+                                          },
+                                          false
+                                        )
+                                      }
+                                      className="h-9 w-14 px-1.5 text-center tabular-nums"
+                                      aria-label="Number of ways"
+                                    />
                                   )}
+                                  <SplitPerPersonHint
+                                    total={item.total_price}
+                                    mode={mode}
+                                    splitN={splitN}
+                                    groupSize={groupSize}
+                                    currency={currency}
+                                  />
                                 </div>
                               ) : (
                                 <p className="text-xs text-muted-foreground">
                                   {mode === "among_group"
-                                    ? `Group${groupSize ? ` (${groupSize})` : ""}`
+                                    ? groupSize > 0
+                                      ? `Group (${groupSize}) · ${formatPHP(
+                                          itemSplitPerPersonAmount(
+                                            item.total_price,
+                                            mode,
+                                            splitN,
+                                            groupSize
+                                          ) ?? item.total_price,
+                                          currency
+                                        )}/ea`
+                                      : `Group${groupSize ? ` (${groupSize})` : ""}`
                                     : mode === "among_claimers"
                                       ? "Claimers"
                                       : splitN <= 1
@@ -1037,37 +1265,45 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                       <option value="claimers">Claimers</option>
                                     </select>
                                     {mode === "among_n" && splitN > 1 && (
-                                      <>
-                                        <EditableNumber
-                                          value={splitN}
-                                          min={2}
-                                          onCommit={(n) =>
-                                            updateItem(
-                                              item.key,
-                                              {
-                                                split_mode: "among_n",
-                                                split_n: Math.min(99, n),
-                                              },
-                                              false
-                                            )
-                                          }
-                                          className="h-9 w-14 px-1.5 text-center tabular-nums"
-                                          aria-label="Number of ways"
-                                        />
-                                        <span className="whitespace-nowrap text-[11px] text-muted-foreground">
-                                          {formatPHP(
-                                            item.total_price / splitN,
-                                            currency
-                                          )}
-                                          /ea
-                                        </span>
-                                      </>
+                                      <EditableNumber
+                                        value={splitN}
+                                        min={2}
+                                        onCommit={(n) =>
+                                          updateItem(
+                                            item.key,
+                                            {
+                                              split_mode: "among_n",
+                                              split_n: Math.min(99, n),
+                                            },
+                                            false
+                                          )
+                                        }
+                                        className="h-9 w-14 px-1.5 text-center tabular-nums"
+                                        aria-label="Number of ways"
+                                      />
                                     )}
+                                    <SplitPerPersonHint
+                                      total={item.total_price}
+                                      mode={mode}
+                                      splitN={splitN}
+                                      groupSize={groupSize}
+                                      currency={currency}
+                                    />
                                   </div>
                                 ) : (
                                   <span className="text-muted-foreground">
                                     {mode === "among_group"
-                                      ? `Group${groupSize ? ` (${groupSize})` : ""}`
+                                      ? groupSize > 0
+                                        ? `Group (${groupSize}) · ${formatPHP(
+                                            itemSplitPerPersonAmount(
+                                              item.total_price,
+                                              mode,
+                                              splitN,
+                                              groupSize
+                                            ) ?? item.total_price,
+                                            currency
+                                          )}/ea`
+                                        : `Group${groupSize ? ` (${groupSize})` : ""}`
                                       : mode === "among_claimers"
                                         ? "Claimers"
                                         : splitN <= 1
@@ -1135,62 +1371,36 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
             </Card>
           )}
 
-          {canEdit && (
-            <Card>
-              <CardHeader className="p-4">
-                <CardTitle className="text-base">Adjustments</CardTitle>
-                <CardDescription>
-                  Amount due is the receipt total — tax/VAT is not added separately
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-3 p-4 pt-0">
-                {(
-                  [
-                    ["Discount", discount, setDiscount],
-                    ["Service charge", serviceCharge, setServiceCharge],
-                    ["Tip", tip, setTip],
-                  ] as const
-                ).map(([label, value, setter]) => (
-                  <div key={label} className="space-y-1.5">
-                    <Label>{label}</Label>
-                    <EditableNumber
-                      value={value}
-                      min={0}
-                      onCommit={setter}
-                    />
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          <Card>
-            <CardHeader className="p-4">
-              <CardTitle className="text-base">Totals</CardTitle>
-              <CardDescription>
-                {canEdit ? "Based on line items + adjustments" : "From the uploaded receipt"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 p-4 pt-0 text-sm">
-              <Row label="Items" value={formatPHP(totals.itemsSubtotal, currency)} />
-              {discount > 0 && (
-                <Row label="Discount" value={`−${formatPHP(totals.discount, currency)}`} />
-              )}
-              {serviceCharge > 0 && (
-                <Row label="Service" value={formatPHP(totals.serviceCharge, currency)} />
-              )}
-              {tip > 0 && (
-                <Row label="Tip" value={formatPHP(totals.tip, currency)} />
-              )}
-              <div className="flex items-center justify-between border-t border-border pt-3 text-base font-semibold">
-                <span>Amount due</span>
-                <span>{formatPHP(totals.total, currency)}</span>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
     </div>
+  );
+}
+
+function SplitPerPersonHint({
+  total,
+  mode,
+  splitN,
+  groupSize,
+  currency,
+}: {
+  total: number;
+  mode: EditorItem["split_mode"];
+  splitN: number;
+  groupSize: number;
+  currency: string;
+}) {
+  const perPerson = itemSplitPerPersonAmount(
+    total,
+    mode ?? "among_n",
+    splitN,
+    groupSize
+  );
+  if (perPerson == null) return null;
+  return (
+    <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+      {formatPHP(perPerson, currency)}/ea
+    </span>
   );
 }
 
@@ -1209,12 +1419,14 @@ function EditableNumber({
   onCommit,
   min,
   className,
+  id,
   "aria-label": ariaLabel,
 }: {
   value: number;
   onCommit: (n: number) => void;
   min?: number;
   className?: string;
+  id?: string;
   "aria-label"?: string;
 }) {
   const [text, setText] = useState(() => String(value));
@@ -1234,6 +1446,7 @@ function EditableNumber({
 
   return (
     <Input
+      id={id}
       type="text"
       inputMode="decimal"
       aria-label={ariaLabel}

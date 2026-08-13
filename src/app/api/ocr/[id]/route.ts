@@ -116,6 +116,16 @@ export async function POST(_request: Request, { params }: Params) {
       if (itemsError) return fail(itemsError, 400);
     }
 
+    const ocrDiscountRows =
+      ocrResult.discountLines ??
+      (ocrResult.discount != null && ocrResult.discount > 0
+        ? [{ label: "Discount", amount: ocrResult.discount }]
+        : []);
+    if (ocrDiscountRows.length > 0) {
+      const { insertReceiptDiscounts } = await import("@/lib/receipt-discounts");
+      await insertReceiptDiscounts(supabase, id, ocrDiscountRows);
+    }
+
     const totals = computeReceiptTotals({
       items: ocrResult.items.map((i) => ({
         quantity: i.quantity,

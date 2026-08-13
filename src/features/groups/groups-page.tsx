@@ -28,6 +28,7 @@ type GroupRow = {
   invite_code: string;
   my_role: string;
   created_at: string;
+  my_joined_at?: string;
   my_owes?: number;
   my_share?: number;
   my_currency?: string;
@@ -68,7 +69,12 @@ async function fetchGroups(): Promise<GroupRow[]> {
     );
   }
   if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load groups");
-  return json?.data ?? [];
+  const rows = json?.data ?? [];
+  return [...rows].sort((a, b) => {
+    const aTime = new Date(a.my_joined_at ?? a.created_at ?? 0).getTime();
+    const bTime = new Date(b.my_joined_at ?? b.created_at ?? 0).getTime();
+    return bTime - aTime;
+  });
 }
 
 /** Stable pseudo-random 0..1 derived from a string, so each tile floats differently. */

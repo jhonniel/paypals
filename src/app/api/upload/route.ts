@@ -269,6 +269,16 @@ export async function POST(request: Request) {
       }
     }
 
+    const ocrDiscountRows =
+      ocrResult.discountLines ??
+      (ocrResult.discount != null && ocrResult.discount > 0
+        ? [{ label: "Discount", amount: ocrResult.discount }]
+        : []);
+    if (ocrDiscountRows.length > 0) {
+      const { insertReceiptDiscounts } = await import("@/lib/receipt-discounts");
+      await insertReceiptDiscounts(supabase, receiptId, ocrDiscountRows);
+    }
+
     await supabase.from("receipt_history").insert({
       receipt_id: receiptId,
       user_id: user.id,
