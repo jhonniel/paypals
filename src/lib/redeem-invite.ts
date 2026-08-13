@@ -56,7 +56,7 @@ async function redeemViaAdmin(
     }
 
     const nextCount = useCount + 1;
-    const { error: inviteUpdateError } = await admin
+    let updateQuery = admin
       .from("signup_invites")
       .update({
         use_count: nextCount,
@@ -65,6 +65,12 @@ async function redeemViaAdmin(
       })
       .eq("id", inviteRow.id)
       .eq("enabled", true);
+
+    if (maxUses != null) {
+      updateQuery = updateQuery.lt("use_count", maxUses);
+    }
+
+    const { error: inviteUpdateError } = await updateQuery;
 
     if (inviteUpdateError) {
       return { ok: false, reason: inviteUpdateError.message };

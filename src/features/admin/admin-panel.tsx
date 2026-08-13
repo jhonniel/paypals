@@ -24,6 +24,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPHP } from "@/lib/money";
 import { signupInviteUrl } from "@/lib/signup-invite-url";
+import { SIGNUP_INVITE_RETENTION_DAYS } from "@/lib/signup-invite-cleanup";
 import { formatDistanceToNow } from "date-fns";
 
 type AdminData = {
@@ -90,7 +91,7 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
   const [newKey, setNewKey] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [inviteLabel, setInviteLabel] = useState("");
-  const [inviteCount, setInviteCount] = useState(1);
+  const [inviteMaxUses, setInviteMaxUses] = useState(10);
   const [inviteSendTo, setInviteSendTo] = useState("");
   const [lastCreatedCode, setLastCreatedCode] = useState<string | null>(null);
   const [lastCreatedCodes, setLastCreatedCodes] = useState<string[]>([]);
@@ -123,6 +124,7 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
         use_count: number;
         enabled: boolean;
         expires_at: string | null;
+        updated_at: string;
         invite_url?: string;
       }>;
     },
@@ -265,13 +267,13 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const count = Math.min(50, Math.max(1, Math.floor(inviteCount) || 1));
+      const maxUses = Math.min(1000, Math.max(1, Math.floor(inviteMaxUses) || 10));
       const res = await fetch("/api/admin/invites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           label: inviteLabel.trim() || null,
-          count,
+          max_uses: maxUses,
           ...(inviteSendTo.trim()
             ? { send_to: inviteSendTo.trim() }
             : {}),
@@ -280,27 +282,18 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Create failed");
 
-      const codes: string[] =
-        Array.isArray(json.data?.codes)
-          ? (json.data.codes as string[])
-          : json.data?.code
-            ? [json.data.code as string]
-            : [];
+      const code = (json.data?.code as string | undefined) ?? null;
+      const url =
+        (json.data?.invite_url as string | undefined) ??
+        (code ? signupInviteUrl(code) : null);
 
-      const urls: string[] =
-        Array.isArray(json.data?.urls)
-          ? (json.data.urls as string[])
-          : json.data?.invite_url
-            ? [json.data.invite_url as string]
-            : codes.map((c) => signupInviteUrl(c));
-
-      setLastCreatedCodes(codes);
-      setLastCreatedUrls(urls);
-      setLastCreatedCode(codes[0] ?? null);
+      setLastCreatedCodes(code ? [code] : []);
+      setLastCreatedUrls(url ? [url] : []);
+      setLastCreatedCode(code);
       setInviteLabel("");
       setInviteSendTo("");
-      if (urls.length) {
-        await navigator.clipboard.writeText(urls.join("\n")).catch(() => null);
+      if (url) {
+        await navigator.clipboard.writeText(url).catch(() => null);
       }
 
       const emailed = json.data?.emailed as
@@ -308,23 +301,13 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
         | null
         | undefined;
       if (emailed?.sent) {
-        toast.success(
-          count === 1
-            ? "Invite link created and emailed"
-            : `${codes.length} unique invite links created and emailed`
-        );
+        toast.success(`Invite link created (${maxUses} signups) and emailed`);
       } else if (emailed && emailed.sent === false) {
         toast.success(
-          count === 1
-            ? `Invite link created (email failed: ${emailed.error ?? "SMTP"})`
-            : `${codes.length} invite links created (email failed)`
+          `Invite link created (email failed: ${emailed.error ?? "SMTP"})`
         );
       } else {
-        toast.success(
-          count === 1
-            ? "Invite link created (copied)"
-            : `${codes.length} unique invite links created (copied)`
-        );
+        toast.success(`Invite link created — up to ${maxUses} signups (copied)`);
       }
       void refetchInvites();
     } catch (err) {
@@ -348,6 +331,31 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
       void refetchInvites();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteInvite(inv: {
+    id: string;
+    code: string;
+    label: string | null;
+  }) {
+    const label = inv.label || inv.code;
+    if (!confirm(`Remove invite “${label}”? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/invites", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: inv.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Delete failed");
+      toast.success("Invite removed");
+      void refetchInvites();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
     } finally {
       setBusy(false);
     }
@@ -531,8 +539,9 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
             <CardHeader>
               <CardTitle className="text-base">Signup invites</CardTitle>
               <CardDescription>
-                Each invite has a unique one-time link (and code). Share the link —
-                after someone signs up, it can’t be reused. Group invites are separate.
+                One shareable link per invite with a signup limit. Fully used links are
+                removed automatically {SIGNUP_INVITE_RETENTION_DAYS} days after the last
+                signup. Group invites are separate.
               </CardDescription>
             </CardHeader>
             <CardContent className="divide-y divide-border p-0">
@@ -540,8 +549,21 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                 <p className="p-4 text-sm text-muted-foreground">No invites yet.</p>
               ) : (
                 (signupInvites ?? []).map((inv) => {
-                  const used = inv.use_count >= (inv.max_uses ?? 1) || !inv.enabled;
+                  const maxUses = inv.max_uses ?? null;
+                  const exhausted =
+                    maxUses != null && inv.use_count >= maxUses;
+                  const used = exhausted || !inv.enabled;
                   const url = inv.invite_url || signupInviteUrl(inv.code);
+                  const usageLabel =
+                    maxUses == null
+                      ? `${inv.use_count} signups · no limit`
+                      : exhausted
+                        ? `${inv.use_count} / ${maxUses} signups · full`
+                        : `${inv.use_count} / ${maxUses} signups used`;
+                  const autoRemoveHint =
+                    exhausted && inv.updated_at
+                      ? ` · auto-removes ${SIGNUP_INVITE_RETENTION_DAYS}d after last use`
+                      : "";
                   return (
                     <div
                       key={inv.id}
@@ -555,8 +577,8 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                           {url}
                         </p>
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          {inv.label || "Untitled"} ·{" "}
-                          {used ? "Used" : "Unused · single use"}
+                          {inv.label || "Untitled"} · {usageLabel}
+                          {autoRemoveHint}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -591,9 +613,20 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                         <span className="text-xs text-muted-foreground">Enabled</span>
                         <Switch
                           checked={inv.enabled}
-                          disabled={busy || inv.use_count >= (inv.max_uses ?? 1)}
+                          disabled={busy || exhausted}
                           onCheckedChange={(v) => void toggleInvite(inv.id, v)}
                         />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="size-8 text-destructive hover:text-destructive"
+                          disabled={busy}
+                          aria-label={`Remove invite ${inv.code}`}
+                          onClick={() => void deleteInvite(inv)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
                       </div>
                     </div>
                   );
@@ -603,10 +636,10 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Create signup invites</CardTitle>
+              <CardTitle className="text-base">Create signup invite</CardTitle>
               <CardDescription>
-                Generate unique single-use invite links. Each person gets their own
-                link — it only works once.
+                Generate one invite link. Choose how many people can sign up with it
+                before it stops working.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -622,19 +655,19 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="invite-count">How many unique links</Label>
+                    <Label htmlFor="invite-max-uses">Signup limit</Label>
                     <Input
-                      id="invite-count"
+                      id="invite-max-uses"
                       type="number"
                       min={1}
-                      max={50}
-                      value={inviteCount}
+                      max={1000}
+                      value={inviteMaxUses}
                       onChange={(e) =>
-                        setInviteCount(Number(e.target.value) || 1)
+                        setInviteMaxUses(Number(e.target.value) || 10)
                       }
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Up to 50 at a time — each link is unique
+                      One link — up to this many people can create accounts
                     </p>
                   </div>
                 </div>
@@ -648,37 +681,10 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                     placeholder="friend@email.com"
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Requires SMTP env vars. Sends unique invite link(s) so they can
-                    sign up.
+                    Requires SMTP env vars. Sends the invite link so they can sign up.
                   </p>
                 </div>
-                {lastCreatedUrls.length > 1 ? (
-                  <div className="space-y-2 rounded-lg bg-muted/50 px-3 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-medium text-muted-foreground">
-                        Last batch ({lastCreatedUrls.length} unique links)
-                      </p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          void navigator.clipboard
-                            .writeText(lastCreatedUrls.join("\n"))
-                            .then(
-                              () => toast.success("All links copied"),
-                              () => toast.error("Could not copy")
-                            );
-                        }}
-                      >
-                        Copy all links
-                      </Button>
-                    </div>
-                    <pre className="max-h-40 overflow-y-auto break-all font-mono text-[11px] font-semibold leading-relaxed">
-                      {lastCreatedUrls.join("\n")}
-                    </pre>
-                  </div>
-                ) : lastCreatedUrls[0] || lastCreatedCode ? (
+                {lastCreatedUrls[0] || lastCreatedCode ? (
                   <div className="space-y-1.5 rounded-lg bg-muted/50 px-3 py-2">
                     <p className="text-xs font-medium text-muted-foreground">
                       Last created link
@@ -707,9 +713,7 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
                 ) : null}
                 <Button type="submit" disabled={busy}>
                   {busy && <Loader2 className="animate-spin" />}
-                  {inviteCount > 1
-                    ? `Generate ${inviteCount} unique links`
-                    : "Generate invite link"}
+                  Generate invite link
                 </Button>
               </form>
             </CardContent>

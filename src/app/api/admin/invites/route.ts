@@ -5,6 +5,7 @@ import { sendSignupInviteEmail } from "@/lib/email/notify";
 import { isSmtpConfigured } from "@/lib/email/smtp";
 import { getAppOrigin } from "@/lib/app-origin";
 import { signupInviteUrl } from "@/lib/signup-invite-url";
+import { cleanupExhaustedSignupInvites } from "@/lib/signup-invite-cleanup";
 
 function withInviteUrls<T extends { code: string }>(
   rows: T[],
@@ -21,6 +22,8 @@ export async function GET(request: Request) {
   try {
     const auth = await getAdminClient();
     if (!auth) return forbidden("Admin access required");
+
+    await cleanupExhaustedSignupInvites(auth.supabase);
 
     const { data, error } = await auth.supabase
       .from("signup_invites")
@@ -43,7 +46,7 @@ function generateInviteCode(length = 12): string {
 }
 
 const createSchema = z.object({
-  /** Optional — server generates a unique code when omitted (single create only). */
+  /** Optional — server generates a unique code when omitted. */
   code: z
     .string()
     .min(4)
@@ -52,9 +55,9 @@ const createSchema = z.object({
     .optional(),
   label: z.string().max(120).optional().nullable(),
   expires_at: z.string().datetime().optional().nullable(),
-  /** How many unique single-use codes to create (1–50). */
-  count: z.number().int().min(1).max(50).optional().default(1),
-  /** Optional — email invite codes to this address via SMTP */
+  /** How many people can sign up with this one link (default 10). */
+  max_uses: z.number().int().min(1).max(1000).optional().default(10),
+  /** Optional — email the invite link to this address via SMTP */
   send_to: z.string().email().optional().nullable(),
 });
 
@@ -67,62 +70,34 @@ export async function POST(request: Request) {
     const parsed = createSchema.safeParse(await request.json());
     if (!parsed.success) return fromZod(parsed.error);
 
-    const count = parsed.data.count ?? 1;
-    if (parsed.data.code && count > 1) {
-      return fail("Custom code can only be used when creating one invite", 400);
-    }
+    const maxUses = parsed.data.max_uses ?? 10;
+    const code = (parsed.data.code?.trim() || generateInviteCode()).toUpperCase();
 
-    const rows: Array<{
-      code: string;
-      label: string | null;
-      max_uses: number;
-      expires_at: string | null;
-      created_by: string;
-      enabled: boolean;
-    }> = [];
-
-    const used = new Set<string>();
-    for (let i = 0; i < count; i++) {
-      let code = (parsed.data.code?.trim() || generateInviteCode()).toUpperCase();
-      // Avoid collisions within this batch
-      let tries = 0;
-      while (used.has(code) && !parsed.data.code) {
-        code = generateInviteCode().toUpperCase();
-        tries += 1;
-        if (tries > 20) break;
-      }
-      used.add(code);
-      const labelBase = parsed.data.label?.trim() || null;
-      rows.push({
-        code,
-        label:
-          count > 1 && labelBase
-            ? `${labelBase} (${i + 1}/${count})`
-            : labelBase,
-        max_uses: 1,
-        expires_at: parsed.data.expires_at ?? null,
-        created_by: user.id,
-        enabled: true,
-      });
-    }
+    const row = {
+      code,
+      label: parsed.data.label?.trim() || null,
+      max_uses: maxUses,
+      expires_at: parsed.data.expires_at ?? null,
+      created_by: user.id,
+      enabled: true,
+    };
 
     const { data, error } = await supabase
       .from("signup_invites")
-      .insert(rows)
+      .insert(row)
       .select("*");
 
     if (error) {
       if (/duplicate|unique/i.test(error.message)) {
-        return fail("One or more invite codes already exist — try again", 400);
+        return fail("Invite code already exists — try again", 400);
       }
       return fail(error.message, 400);
     }
 
     const createdRows = withInviteUrls(data ?? [], request);
     await writeAuditLog(supabase, "create_signup_invite", "signup_invite", null, {
-      count: createdRows.length,
-      codes: createdRows.map((r) => r.code),
-      max_uses: 1,
+      code: createdRows[0]?.code,
+      max_uses: maxUses,
     });
 
     let emailed: { sent: boolean; error?: string } | null = null;
@@ -150,13 +125,7 @@ export async function POST(request: Request) {
       return created({ ...createdRows[0], emailed });
     }
 
-    return created({
-      count: createdRows.length,
-      invites: createdRows,
-      codes: createdRows.map((r) => r.code),
-      urls: createdRows.map((r) => r.invite_url),
-      emailed,
-    });
+    return created({ invites: createdRows, emailed });
   } catch (e) {
     console.error(e);
     return serverError();
@@ -187,6 +156,33 @@ export async function PATCH(request: Request) {
 
     if (error) return fail(error.message, 400);
     return ok(data);
+  } catch (e) {
+    console.error(e);
+    return serverError();
+  }
+}
+
+const deleteSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export async function DELETE(request: Request) {
+  try {
+    const auth = await getAdminClient();
+    if (!auth) return forbidden("Admin access required");
+
+    const parsed = deleteSchema.safeParse(await request.json());
+    if (!parsed.success) return fromZod(parsed.error);
+
+    const { error } = await auth.supabase
+      .from("signup_invites")
+      .delete()
+      .eq("id", parsed.data.id);
+
+    if (error) return fail(error.message, 400);
+
+    await writeAuditLog(auth.supabase, "delete_signup_invite", "signup_invite", parsed.data.id);
+    return ok({ deleted: true });
   } catch (e) {
     console.error(e);
     return serverError();
