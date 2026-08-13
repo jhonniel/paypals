@@ -20,6 +20,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ItemBreakdownList } from "@/components/item-breakdown-list";
 import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
+import {
+  GROUP_INVITE_CODE_LENGTH,
+  normalizeGroupInviteCodeInput,
+} from "@/lib/group-invite-code";
 
 type GroupRow = {
   id: string;
@@ -465,9 +469,9 @@ export function GroupsPageView() {
 
   async function joinByCode(e: React.FormEvent) {
     e.preventDefault();
-    const code = inviteCode.trim();
-    if (code.length < 4) {
-      toast.error("Enter a valid invite code");
+    const code = normalizeGroupInviteCodeInput(inviteCode);
+    if (code.length < GROUP_INVITE_CODE_LENGTH) {
+      toast.error(`Enter the ${GROUP_INVITE_CODE_LENGTH}-character invite code`);
       return;
     }
     router.push(`/invite/${encodeURIComponent(code)}`);
@@ -514,20 +518,28 @@ export function GroupsPageView() {
                 <Input
                   id="join-code"
                   value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="Paste group invite code"
+                  onChange={(e) =>
+                    setInviteCode(normalizeGroupInviteCodeInput(e.target.value))
+                  }
+                  placeholder="e.g. K7M2P9"
                   autoComplete="off"
-                  autoCapitalize="off"
+                  autoCapitalize="characters"
                   spellCheck={false}
                   required
-                  minLength={4}
+                  minLength={GROUP_INVITE_CODE_LENGTH}
+                  maxLength={GROUP_INVITE_CODE_LENGTH}
+                  className="font-mono uppercase tracking-widest"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Ask a group member for their invite code, then join here.
+                  Ask a group member for their {GROUP_INVITE_CODE_LENGTH}-character code
+                  (letters and numbers only).
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button type="submit" disabled={inviteCode.trim().length < 4}>
+                <Button
+                  type="submit"
+                  disabled={inviteCode.trim().length < GROUP_INVITE_CODE_LENGTH}
+                >
                   Continue
                 </Button>
                 <Button type="button" variant="ghost" onClick={() => setJoinOpen(false)}>

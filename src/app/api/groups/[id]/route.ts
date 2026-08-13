@@ -27,6 +27,11 @@ import {
 } from "@/lib/receipt-discounts";
 import { resolveReceiptPayerMemberId } from "@/lib/group-member-payments";
 import { groupInviteUrlFromRequest } from "@/lib/signup-invite-url";
+import {
+  generateGroupInviteCode,
+  GROUP_INVITE_CODE_LENGTH,
+  isUniqueInviteCodeViolation,
+} from "@/lib/group-invite-code";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -629,7 +634,28 @@ export async function GET(req: Request, { params }: Params) {
       )
     ).filter((row) => row.methods.length > 0);
 
-    const appUrl = groupInviteUrlFromRequest(String(group.invite_code ?? ""), req);
+    let inviteCode = String(group.invite_code ?? "");
+    if (
+      canManageMembers &&
+      inviteCode.length !== GROUP_INVITE_CODE_LENGTH
+    ) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const next = generateGroupInviteCode();
+        const { data: updated, error: updateError } = await supabase
+          .from("groups")
+          .update({ invite_code: next })
+          .eq("id", id)
+          .select("invite_code")
+          .maybeSingle();
+        if (!updateError && updated?.invite_code) {
+          inviteCode = updated.invite_code;
+          break;
+        }
+        if (updateError && !isUniqueInviteCodeViolation(updateError)) break;
+      }
+    }
+
+    const appUrl = groupInviteUrlFromRequest(inviteCode, req);
 
     let payment_proofs: Array<{
       member_id: string;
@@ -674,7 +700,7 @@ export async function GET(req: Request, { params }: Params) {
     }
 
     return ok({
-      group,
+      group: { ...group, invite_code: inviteCode },
       members: visibleMembers,
       member_count: membersVisible ? (members ?? []).length : visibleMembers.length,
       receipts: receiptsForClient,

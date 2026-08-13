@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
+import {
+  generateGroupInviteCode,
+  isUniqueInviteCodeViolation,
+} from "@/lib/group-invite-code";
 import { ok, created, unauthorized, fail, fromZod, serverError } from "@/lib/api";
 import {
   getGroupMemberPayments,
@@ -126,20 +130,38 @@ export async function POST(request: Request) {
     const parsed = createSchema.safeParse(body);
     if (!parsed.success) return fromZod(parsed.error);
 
-    const inviteCode = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    let group: Record<string, unknown> | null = null;
+    let lastError: { message: string } | null = null;
 
-    const { data: group, error } = await supabase
-      .from("groups")
-      .insert({
-        name: parsed.data.name,
-        description: parsed.data.description ?? null,
-        created_by: user.id,
-        invite_code: inviteCode,
-      })
-      .select("*")
-      .single();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const inviteCode = generateGroupInviteCode();
+      const { data, error } = await supabase
+        .from("groups")
+        .insert({
+          name: parsed.data.name,
+          description: parsed.data.description ?? null,
+          created_by: user.id,
+          invite_code: inviteCode,
+        })
+        .select("*")
+        .single();
 
-    if (error) return fail(error.message, 400);
+      if (!error && data) {
+        group = data;
+        break;
+      }
+
+      if (error && isUniqueInviteCodeViolation(error)) {
+        lastError = error;
+        continue;
+      }
+
+      if (error) return fail(error.message, 400);
+    }
+
+    if (!group) {
+      return fail(lastError?.message ?? "Could not generate a unique invite code", 400);
+    }
 
     const { error: memberError } = await supabase.from("group_members").insert({
       group_id: group.id,

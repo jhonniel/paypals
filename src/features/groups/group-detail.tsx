@@ -38,6 +38,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
 import { publicEnv } from "@/lib/env";
+import { formatGroupInviteCode } from "@/lib/group-invite-code";
 import { itemSplitPerPersonAmount } from "@/lib/splits";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
 import { readApiJson } from "@/lib/api-client";
@@ -1850,14 +1851,14 @@ function InviteMembersModal({
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Share the link, QR, or code. Friends can open the link or go to
+                    Share the link, QR, or 6-character code. Friends can open the link or go to
                     Groups → Join with code.
                   </p>
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm">
-                      Code:{" "}
-                      <span className="font-mono font-medium">{inviteCode}</span>
-                    </p>
+                    <p className="text-sm text-muted-foreground">Code</p>
+                    <span className="rounded-md bg-muted px-2.5 py-1 font-mono text-lg font-semibold tracking-[0.2em]">
+                      {formatGroupInviteCode(inviteCode)}
+                    </span>
                     <Button
                       type="button"
                       size="sm"
@@ -1865,7 +1866,9 @@ function InviteMembersModal({
                       className="h-7 px-2 text-xs"
                       onClick={async () => {
                         try {
-                          await navigator.clipboard.writeText(inviteCode);
+                          await navigator.clipboard.writeText(
+                            formatGroupInviteCode(inviteCode)
+                          );
                           toast.success("Code copied");
                         } catch {
                           toast.error("Could not copy");
