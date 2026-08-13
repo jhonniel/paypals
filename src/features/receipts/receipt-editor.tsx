@@ -361,19 +361,21 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     },
   });
 
-  function setDiscountTotal(amount: number) {
-    setDiscounts((prev) => {
-      if (amount <= 0) return [];
-      const first = prev[0];
-      return [
-        {
-          key: first?.key ?? uid(),
-          id: first?.id,
-          label: first?.label?.trim() || "Discount",
-          amount,
-        },
-      ];
-    });
+  function addDiscount() {
+    setDiscounts((prev) => [
+      ...prev,
+      { key: uid(), label: prev.length === 0 ? "Discount" : "Discount", amount: 0 },
+    ]);
+  }
+
+  function updateDiscount(key: string, patch: Partial<EditorDiscount>) {
+    setDiscounts((prev) =>
+      prev.map((row) => (row.key === key ? { ...row, ...patch } : row))
+    );
+  }
+
+  function removeDiscount(key: string) {
+    setDiscounts((prev) => prev.filter((row) => row.key !== key));
   }
 
   function updateItem(key: string, patch: Partial<EditorItem>, recalc = true) {
@@ -1248,18 +1250,72 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3 p-4 pt-0">
-                {(
-                  [
-                    ["Discount", discountTotal, setDiscountTotal],
-                    ["Service charge", serviceCharge, setServiceCharge],
-                    ["Tip", tip, setTip],
-                  ] as const
-                ).map(([label, value, setter]) => (
-                  <div key={label} className="space-y-1.5">
-                    <Label>{label}</Label>
-                    <EditableNumber value={value} min={0} onCommit={setter} />
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>Discounts</Label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 px-2 text-xs"
+                      onClick={addDiscount}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add
+                    </Button>
                   </div>
-                ))}
+                  {discounts.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-border px-2 py-3 text-xs text-muted-foreground">
+                      No discounts — tap Add for promos, senior/PWD, etc.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {discounts.map((row) => (
+                        <div key={row.key} className="space-y-1.5 rounded-lg border border-border p-2">
+                          <Input
+                            value={row.label}
+                            onChange={(e) =>
+                              updateDiscount(row.key, { label: e.target.value })
+                            }
+                            placeholder="e.g. Senior, Promo"
+                            className="h-9 text-sm"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <EditableNumber
+                              value={row.amount}
+                              min={0}
+                              onCommit={(amount) => updateDiscount(row.key, { amount })}
+                              className="h-9 flex-1"
+                              aria-label={`${row.label} amount`}
+                            />
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-9 w-9 shrink-0 text-destructive hover:text-destructive"
+                              onClick={() => removeDiscount(row.key)}
+                              aria-label={`Remove ${row.label}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Service charge</Label>
+                  <EditableNumber
+                    value={serviceCharge}
+                    min={0}
+                    onCommit={setServiceCharge}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Tip</Label>
+                  <EditableNumber value={tip} min={0} onCommit={setTip} />
+                </div>
               </CardContent>
             </Card>
           )}
