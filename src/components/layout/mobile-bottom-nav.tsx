@@ -18,6 +18,7 @@ import {
   navItemVariants,
   navListVariants,
 } from "@/components/layout/nav-draw-icon";
+import { isNavItemActive } from "@/components/layout/nav-active";
 import { useMobileKeyboardOpen } from "@/hooks/use-mobile-keyboard";
 
 const items = [
@@ -57,11 +58,7 @@ export function MobileBottomNav() {
         animate="show"
       >
         {items.map((item) => {
-          const active =
-            pathname === item.href ||
-            (item.href !== "/dashboard" &&
-              item.href !== "/receipts/new" &&
-              pathname.startsWith(item.href));
+          const active = isNavItemActive(pathname, item.href);
 
           const shouldDraw = boot || active;
           const drawKey = boot

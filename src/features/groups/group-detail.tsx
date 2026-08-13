@@ -1175,28 +1175,27 @@ export function GroupDetailView({
 
                   {(canManage || isMe) && payTotal > 0 && (
                     <div className="mt-3 rounded-xl bg-background/60 px-3 py-2 text-center">
-                      {isPaid ? (
+                      {isBillPayer && owesTotal <= 0 ? (
+                        <>
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary">
+                            <CheckCircle2 className="h-4 w-4" />
+                            {isMe ? "You paid the bill" : "Bill payer"}
+                          </span>
+                          <p className="mt-2 text-xl font-semibold tabular-nums tracking-tight">
+                            {money(payTotal, payCurrency)}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground">
+                            {isMe ? "Your share at the table" : "Share at the table"}
+                          </p>
+                        </>
+                      ) : isPaid ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
                           <CheckCircle2 className="h-4 w-4" />
                           Paid
                           {proof?.manual ? (
                             <span className="font-normal opacity-80">· manual</span>
-                          ) : proofMeta.bill_payer ? (
-                            <span className="font-normal opacity-80">· bill payer</span>
                           ) : null}
                         </span>
-                      ) : isBillPayer && owesTotal <= 0 ? (
-                        <>
-                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                            {isMe ? "You paid the bill" : "Bill payer"}
-                          </p>
-                          <p className="text-xl font-semibold tabular-nums tracking-tight">
-                            {money(payTotal, payCurrency)}
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground">
-                            {isMe ? "Your share" : "Share"}
-                          </p>
-                        </>
                       ) : (
                         <>
                           <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

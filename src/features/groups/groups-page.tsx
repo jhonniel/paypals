@@ -292,13 +292,13 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                 {money(owes, currency)}
               </p>
             </div>
+          ) : group.my_is_bill_payer && owes <= 0 ? (
+            <p className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary">
+              You paid the bill
+            </p>
           ) : group.my_paid ? (
             <p className="rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
               Paid
-            </p>
-          ) : group.my_is_bill_payer && (group.my_share ?? 0) > 0 ? (
-            <p className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary">
-              You paid the bill
             </p>
           ) : null}
           {flareKey > 0 && (
@@ -397,12 +397,12 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
             aria-label={`Open ${group.name}`}
           >
             <span className="text-sm font-semibold tabular-nums">
-              {group.my_paid
-                ? "Paid"
-                : owes > 0
-                  ? money(owes, currency)
-                  : group.my_is_bill_payer
-                    ? "Bill paid"
+              {group.my_is_bill_payer && owes <= 0
+                ? "You paid the bill"
+                : group.my_paid
+                  ? "Paid"
+                  : owes > 0
+                    ? money(owes, currency)
                     : money(0, currency)}
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary">

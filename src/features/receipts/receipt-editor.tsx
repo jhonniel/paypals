@@ -361,21 +361,19 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     },
   });
 
-  function addDiscount() {
-    setDiscounts((prev) => [
-      ...prev,
-      { key: uid(), label: "Discount", amount: 0 },
-    ]);
-  }
-
-  function updateDiscount(key: string, patch: Partial<EditorDiscount>) {
-    setDiscounts((prev) =>
-      prev.map((row) => (row.key === key ? { ...row, ...patch } : row))
-    );
-  }
-
-  function removeDiscount(key: string) {
-    setDiscounts((prev) => prev.filter((row) => row.key !== key));
+  function setDiscountTotal(amount: number) {
+    setDiscounts((prev) => {
+      if (amount <= 0) return [];
+      const first = prev[0];
+      return [
+        {
+          key: first?.key ?? uid(),
+          id: first?.id,
+          label: first?.label?.trim() || "Discount",
+          amount,
+        },
+      ];
+    });
   }
 
   function updateItem(key: string, patch: Partial<EditorItem>, recalc = true) {
@@ -759,136 +757,6 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                   readOnly={!canEdit}
                   disabled={!canEdit}
                 />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="p-4 sm:p-6">
-              <CardTitle className="text-base sm:text-lg">Totals & adjustments</CardTitle>
-              <CardDescription>
-                {canEdit
-                  ? "Add one or more discounts (promo, senior/PWD, etc.) — each is deducted from the amount due"
-                  : "From the uploaded receipt"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 p-4 pt-0 sm:p-6 sm:pt-0 text-sm">
-              <Row
-                label="Items subtotal"
-                value={formatPHP(totals.itemsSubtotal, currency)}
-              />
-              {canEdit ? (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label>Discounts</Label>
-                      <Button type="button" size="sm" variant="outline" onClick={addDiscount}>
-                        <Plus /> Add discount
-                      </Button>
-                    </div>
-                    {discounts.length === 0 ? (
-                      <p className="rounded-xl border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
-                        No discounts yet — add one for promos, senior/PWD, or other deductions.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {discounts.map((row) => (
-                          <div
-                            key={row.key}
-                            className="grid gap-2 rounded-xl border border-border p-3 sm:grid-cols-[1fr_140px_auto]"
-                          >
-                            <div className="space-y-1.5">
-                              <Label className="sr-only">Discount label</Label>
-                              <Input
-                                value={row.label}
-                                onChange={(e) =>
-                                  updateDiscount(row.key, { label: e.target.value })
-                                }
-                                placeholder="e.g. Senior, Promo"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="sr-only">Discount amount</Label>
-                              <EditableNumber
-                                value={row.amount}
-                                min={0}
-                                onCommit={(amount) => updateDiscount(row.key, { amount })}
-                                aria-label={`${row.label} amount`}
-                              />
-                            </div>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="shrink-0 self-end text-destructive hover:text-destructive"
-                              onClick={() => removeDiscount(row.key)}
-                              aria-label={`Remove ${row.label}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {discountTotal > 0 && (
-                      <Row
-                        label="Total discounts"
-                        value={`−${formatPHP(discountTotal, currency)}`}
-                      />
-                    )}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="receipt-service">Service charge</Label>
-                      <EditableNumber
-                        id="receipt-service"
-                        value={serviceCharge}
-                        min={0}
-                        onCommit={setServiceCharge}
-                        aria-label="Service charge amount"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="receipt-tip">Tip</Label>
-                      <EditableNumber
-                        id="receipt-tip"
-                        value={tip}
-                        min={0}
-                        onCommit={setTip}
-                        aria-label="Tip amount"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {discounts.map((row) => (
-                    <Row
-                      key={row.key}
-                      label={row.label}
-                      value={`−${formatPHP(row.amount, currency)}`}
-                    />
-                  ))}
-                  {discountTotal > 0 && discounts.length > 1 && (
-                    <Row
-                      label="Total discounts"
-                      value={`−${formatPHP(discountTotal, currency)}`}
-                    />
-                  )}
-                  {serviceCharge > 0 && (
-                    <Row
-                      label="Service"
-                      value={formatPHP(totals.serviceCharge, currency)}
-                    />
-                  )}
-                  {tip > 0 && (
-                    <Row label="Tip" value={formatPHP(totals.tip, currency)} />
-                  )}
-                </>
-              )}
-              <div className="flex items-center justify-between border-t border-border pt-3 text-base font-semibold">
-                <span>Amount due</span>
-                <span>{formatPHP(totals.total, currency)}</span>
               </div>
             </CardContent>
           </Card>
@@ -1371,6 +1239,73 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
             </Card>
           )}
 
+          {canEdit && (
+            <Card>
+              <CardHeader className="p-4">
+                <CardTitle className="text-base">Adjustments</CardTitle>
+                <CardDescription>
+                  Amount due is the receipt total — tax/VAT is not added separately
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 p-4 pt-0">
+                {(
+                  [
+                    ["Discount", discountTotal, setDiscountTotal],
+                    ["Service charge", serviceCharge, setServiceCharge],
+                    ["Tip", tip, setTip],
+                  ] as const
+                ).map(([label, value, setter]) => (
+                  <div key={label} className="space-y-1.5">
+                    <Label>{label}</Label>
+                    <EditableNumber value={value} min={0} onCommit={setter} />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">Totals</CardTitle>
+              <CardDescription>
+                {canEdit ? "Based on line items + adjustments" : "From the uploaded receipt"}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 p-4 pt-0 text-sm">
+              <Row label="Items" value={formatPHP(totals.itemsSubtotal, currency)} />
+              {discountTotal > 0 &&
+                (discounts.length === 1 ? (
+                  <Row
+                    label={discounts[0]?.label || "Discount"}
+                    value={`−${formatPHP(totals.discount, currency)}`}
+                  />
+                ) : (
+                  <>
+                    {discounts.map((row) => (
+                      <Row
+                        key={row.key}
+                        label={row.label}
+                        value={`−${formatPHP(row.amount, currency)}`}
+                      />
+                    ))}
+                    <Row
+                      label="Total discounts"
+                      value={`−${formatPHP(totals.discount, currency)}`}
+                    />
+                  </>
+                ))}
+              {serviceCharge > 0 && (
+                <Row label="Service" value={formatPHP(totals.serviceCharge, currency)} />
+              )}
+              {tip > 0 && (
+                <Row label="Tip" value={formatPHP(totals.tip, currency)} />
+              )}
+              <div className="flex items-center justify-between border-t border-border pt-3 text-base font-semibold">
+                <span>Amount due</span>
+                <span>{formatPHP(totals.total, currency)}</span>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

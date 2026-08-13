@@ -22,6 +22,7 @@ import {
   navItemVariants,
   navListVariants,
 } from "@/components/layout/nav-draw-icon";
+import { isNavItemActive } from "@/components/layout/nav-active";
 import { BrandWordmark } from "@/components/brand-wordmark";
 
 const nav = [
@@ -96,8 +97,7 @@ export function AppSidebar({
         animate="show"
       >
         {items.map((item) => {
-          const active =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const active = isNavItemActive(pathname, item.href);
           const shouldDraw = boot || active;
           const drawKey = boot
             ? `${item.href}-boot`

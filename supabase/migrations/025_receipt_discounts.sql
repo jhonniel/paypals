@@ -66,3 +66,5 @@ CREATE POLICY "receipt_discounts_delete_via_receipt"
       WHERE r.id = receipt_id AND r.created_by = auth.uid()
     )
   );
+
+NOTIFY pgrst, 'reload schema';

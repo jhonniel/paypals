@@ -4,6 +4,7 @@ import { ok, unauthorized, notFound, fromZod, fail, serverError } from "@/lib/ap
 import { computeReceiptTotals } from "@/lib/money";
 import {
   insertReceiptDiscounts,
+  isReceiptDiscountsUnavailable,
   normalizeDiscountRows,
   sumDiscountAmount,
 } from "@/lib/receipt-discounts";
@@ -49,11 +50,9 @@ export async function GET(_request: Request, { params }: Params) {
         .order("sort_order", { ascending: true }),
     ]);
 
-    const discountRows =
-      discountsQuery.error &&
-      /receipt_discounts|relation|column/i.test(discountsQuery.error.message)
-        ? []
-        : (discountsQuery.data ?? []);
+    const discountRows = isReceiptDiscountsUnavailable(discountsQuery.error)
+      ? []
+      : (discountsQuery.data ?? []);
 
     const discounts = normalizeDiscountRows(
       (discountRows ?? []).map((row) => ({
@@ -372,19 +371,21 @@ export async function PATCH(request: Request, { params }: Params) {
       .eq("receipt_id", id)
       .order("sort_order", { ascending: true });
 
-    const { data: savedDiscounts } = await supabase
+    const { data: savedDiscounts, error: savedDiscountsError } = await supabase
       .from("receipt_discounts")
       .select("*")
       .eq("receipt_id", id)
       .order("sort_order", { ascending: true });
 
     const normalizedDiscounts = normalizeDiscountRows(
-      (savedDiscounts ?? []).map((row) => ({
-        id: row.id,
-        label: row.label,
-        amount: Number(row.amount),
-        sort_order: row.sort_order,
-      })),
+      isReceiptDiscountsUnavailable(savedDiscountsError)
+        ? []
+        : (savedDiscounts ?? []).map((row) => ({
+            id: row.id,
+            label: row.label,
+            amount: Number(row.amount),
+            sort_order: row.sort_order,
+          })),
       Number(receipt.discount)
     );
 
