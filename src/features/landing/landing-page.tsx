@@ -266,7 +266,7 @@ export function LandingPage() {
           >
             <BrandWordmark
               size="hero"
-              className="text-foreground [text-shadow:0_2px_24px_rgba(0,0,0,0.55)]"
+              className="block text-foreground [text-shadow:0_2px_24px_rgba(0,0,0,0.55)]"
               replayKey="landing-hero"
             />
             <h1 className="mt-5 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl [text-shadow:0_2px_18px_rgba(0,0,0,0.5)]">
@@ -287,7 +287,7 @@ export function LandingPage() {
               </Button>
             </div>
             <p className="mt-4 text-xs text-foreground/70 sm:text-sm">
-              Invite-only access · Works with camera, PDF, and HEIC · Default currency PHP
+              Invite-only access
             </p>
           </motion.div>
 

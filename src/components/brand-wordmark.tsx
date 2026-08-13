@@ -21,13 +21,10 @@ const sizeClass: Record<NonNullable<BrandWordmarkProps["size"]>, string> = {
   sm: "text-xl tracking-tight",
   md: "text-2xl tracking-tight",
   lg: "text-3xl tracking-tight",
-  hero: "text-[clamp(3rem,11vw,4.75rem)] leading-[0.92] tracking-tight",
+  hero: "text-[clamp(3rem,11vw,4.75rem)] leading-[1.12] tracking-tight",
 };
 
-/**
- * Brand wordmark with a cursive-style writing reveal
- * (letters ink in left-to-right like a pen stroke).
- */
+/** Brand wordmark with a subtle fade-in reveal. */
 export function BrandWordmark({
   href,
   className,
@@ -41,55 +38,20 @@ export function BrandWordmark({
     <motion.span
       key={replayKey}
       className={cn(
-        "brand-wordmark relative inline-flex font-[family-name:var(--font-display)]",
+        "brand-wordmark relative inline-block overflow-visible font-[family-name:var(--font-display)]",
         sizeClass[size],
+        size === "hero" && "pb-1",
         !href && className
       )}
       aria-label="Paypals"
-      initial="hidden"
-      animate="show"
-      variants={{
-        hidden: {},
-        show: {
-          transition: {
-            staggerChildren: reduceMotion ? 0 : 0.055,
-            delayChildren: reduceMotion ? 0 : 0.08,
-          },
-        },
-      }}
+      initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.55, ease }}
     >
-      {WORD.split("").map((char, i) => (
-        <motion.span
-          key={`${char}-${i}`}
-          className="brand-wordmark-letter relative inline-block"
-          variants={
-            reduceMotion
-              ? undefined
-              : {
-                  hidden: {
-                    opacity: 0,
-                    y: 6,
-                    clipPath: "inset(0 100% 0 0)",
-                  },
-                  show: {
-                    opacity: 1,
-                    y: 0,
-                    clipPath: "inset(0 0% 0 0)",
-                    transition: {
-                      duration: 0.42,
-                      ease,
-                    },
-                  },
-                }
-          }
-          style={{ whiteSpace: "pre" }}
-        >
-          {char}
-        </motion.span>
-      ))}
+      {WORD}
       {!reduceMotion ? (
         <motion.span
-          className="brand-wordmark-ink pointer-events-none absolute -bottom-0.5 left-0 h-[1.5px] origin-left rounded-full bg-current"
+          className="brand-wordmark-ink pointer-events-none absolute bottom-0 left-0 h-[1.5px] origin-left rounded-full bg-current"
           aria-hidden
           initial={{ scaleX: 0, opacity: 0 }}
           animate={{ scaleX: 1, opacity: [0, 0.35, 0] }}
@@ -110,7 +72,7 @@ export function BrandWordmark({
       <Link
         href={href}
         onClick={onClick}
-        className={cn("inline-flex", className)}
+        className={cn("inline-block overflow-visible", className)}
       >
         {content}
       </Link>

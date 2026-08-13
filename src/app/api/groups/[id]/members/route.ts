@@ -21,6 +21,11 @@ const addSchema = z.discriminatedUnion("kind", [
     username: z.string().min(3).max(30),
     role: z.enum(["admin", "member"]).default("member"),
   }),
+  z.object({
+    kind: z.literal("email"),
+    email: z.string().email(),
+    role: z.enum(["admin", "member"]).default("member"),
+  }),
 ]);
 
 export async function POST(request: Request, { params }: Params) {
@@ -45,6 +50,14 @@ export async function POST(request: Request, { params }: Params) {
         .from("profiles")
         .select("id, email, full_name")
         .eq("username", parsed.data.username)
+        .maybeSingle();
+      if (!profile) return fail("User not found", 404);
+      userId = profile.id;
+    } else if (parsed.data.kind === "email") {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id, email, full_name")
+        .eq("email", parsed.data.email.trim().toLowerCase())
         .maybeSingle();
       if (!profile) return fail("User not found", 404);
       userId = profile.id;

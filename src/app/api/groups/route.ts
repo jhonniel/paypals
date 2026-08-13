@@ -85,7 +85,19 @@ export async function GET() {
       })
     );
 
-    return ok(groups.filter(Boolean));
+    const sorted = groups
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aTime = a?.created_at
+          ? new Date(String(a.created_at)).getTime()
+          : 0;
+        const bTime = b?.created_at
+          ? new Date(String(b.created_at)).getTime()
+          : 0;
+        return bTime - aTime;
+      });
+
+    return ok(sorted);
   } catch (e) {
     console.error(e);
     return serverError();

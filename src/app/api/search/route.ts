@@ -13,7 +13,7 @@ export async function GET(request: Request) {
     }
 
     const pattern = `%${q.replace(/[%_,]/g, "")}%`;
-    const peopleFilter = `full_name.ilike."${pattern}",username.ilike."${pattern}"`;
+    const peopleFilter = `full_name.ilike."${pattern}",username.ilike."${pattern}",email.ilike."${pattern}"`;
 
     const [receipts, memberships, profiles] = await Promise.all([
       supabase
@@ -35,6 +35,7 @@ export async function GET(request: Request) {
     ]);
 
     if (receipts.error) return fail(receipts.error.message, 400);
+    if (profiles.error) return fail(profiles.error.message, 400);
 
     const groups = (memberships.data ?? [])
       .map((m) => {

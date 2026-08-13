@@ -11,6 +11,7 @@ import {
   Copy,
   Loader2,
   Mail,
+  Search,
   UserPlus,
   Trash2,
   Receipt,
@@ -20,12 +21,19 @@ import {
   Upload,
   CheckCircle2,
   RotateCw,
+  MoreHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
@@ -473,8 +481,18 @@ type FriendRow = {
   status: string;
   requester_id: string;
   addressee_id: string;
-  requester: { id: string; full_name: string | null; username: string | null } | null;
-  addressee: { id: string; full_name: string | null; username: string | null } | null;
+  requester: {
+    id: string;
+    full_name: string | null;
+    username: string | null;
+    email: string | null;
+  } | null;
+  addressee: {
+    id: string;
+    full_name: string | null;
+    username: string | null;
+    email: string | null;
+  } | null;
 };
 
 export function GroupDetailView({
@@ -512,7 +530,6 @@ export function GroupDetailView({
 
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
-  const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [claimReceiptId, setClaimReceiptId] = useState<string | null>(null);
@@ -576,10 +593,19 @@ export function GroupDetailView({
       if (!other || memberUserIds.has(other.id)) return null;
       return {
         id: other.id,
-        name: other.full_name || other.username || "Friend",
+        name: other.full_name || other.username || other.email || "Friend",
+        username: other.username,
+        email: other.email,
       };
     })
-    .filter((f): f is { id: string; name: string } => Boolean(f));
+    .filter(
+      (f): f is {
+        id: string;
+        name: string;
+        username: string | null;
+        email: string | null;
+      } => Boolean(f)
+    );
 
   async function copyInvite() {
     if (!data) return;
@@ -674,19 +700,23 @@ export function GroupDetailView({
     }
   }
 
-  async function addByUsername(e: React.FormEvent) {
-    e.preventDefault();
+  async function addByLookup(payload: { username?: string; email?: string }) {
     setBusy(true);
     try {
+      const body = payload.email
+        ? { kind: "email" as const, email: payload.email.trim().toLowerCase() }
+        : {
+            kind: "username" as const,
+            username: (payload.username ?? "").trim().replace(/^@/, ""),
+          };
       const res = await fetch(`/api/groups/${groupId}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "username", username }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       toast.success("Member added");
-      setUsername("");
       setInviteModalOpen(false);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
     } catch (err) {
@@ -870,12 +900,47 @@ export function GroupDetailView({
         >
           <ArrowLeft className="h-4 w-4" /> Groups
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          {data.group.name}
-        </h1>
-        {data.group.description && (
-          <p className="mt-1 text-sm text-muted-foreground">{data.group.description}</p>
-        )}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              {data.group.name}
+            </h1>
+            {data.group.description && (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {data.group.description}
+              </p>
+            )}
+          </div>
+          {isOwner ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-10 w-10 shrink-0"
+                  aria-label="Group options"
+                >
+                  <MoreHorizontal className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  disabled={deletingGroup}
+                  onClick={() => setDeleteConfirmOpen(true)}
+                >
+                  {deletingGroup ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Delete group…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+        </div>
       </div>
 
       <Card>
@@ -1475,33 +1540,6 @@ export function GroupDetailView({
         </CardContent>
       </Card>
 
-      {isOwner && (
-        <Card className="border-destructive/25">
-          <CardHeader>
-            <CardTitle className="text-base text-destructive">Delete group</CardTitle>
-            <CardDescription>
-              Permanently remove this group, its receipts, splits, and payment records.
-              Members will lose access. This cannot be undone.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={deletingGroup}
-              onClick={() => setDeleteConfirmOpen(true)}
-            >
-              {deletingGroup ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
-              Delete group
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
       {inviteModalOpen && (
         <InviteMembersModal
           busy={busy}
@@ -1509,15 +1547,14 @@ export function GroupDetailView({
           inviteUrl={data.invite_url}
           inviteCode={data.group.invite_code}
           friends={acceptedFriends}
-          username={username}
+          memberUserIds={memberUserIds}
           guestName={guestName}
           guestEmail={guestEmail}
           onCopyInvite={() => void copyInvite()}
-          onUsernameChange={setUsername}
           onGuestNameChange={setGuestName}
           onGuestEmailChange={setGuestEmail}
           onAddFriend={(id) => void addFriend(id)}
-          onAddUsername={(e) => void addByUsername(e)}
+          onAddByLookup={(payload) => void addByLookup(payload)}
           onAddGuest={(e) => void addGuest(e)}
           onClose={() => setInviteModalOpen(false)}
         />
@@ -1635,15 +1672,14 @@ function InviteMembersModal({
   inviteUrl,
   inviteCode,
   friends,
-  username,
+  memberUserIds,
   guestName,
   guestEmail,
   onCopyInvite,
-  onUsernameChange,
   onGuestNameChange,
   onGuestEmailChange,
   onAddFriend,
-  onAddUsername,
+  onAddByLookup,
   onAddGuest,
   onClose,
 }: {
@@ -1651,20 +1687,72 @@ function InviteMembersModal({
   canManage: boolean;
   inviteUrl: string;
   inviteCode: string;
-  friends: Array<{ id: string; name: string }>;
-  username: string;
+  friends: Array<{
+    id: string;
+    name: string;
+    username: string | null;
+    email: string | null;
+  }>;
+  memberUserIds: Set<string>;
   guestName: string;
   guestEmail: string;
   onCopyInvite: () => void;
-  onUsernameChange: (v: string) => void;
   onGuestNameChange: (v: string) => void;
   onGuestEmailChange: (v: string) => void;
   onAddFriend: (id: string) => void;
-  onAddUsername: (e: React.FormEvent) => void;
+  onAddByLookup: (payload: { username?: string; email?: string }) => void;
   onAddGuest: (e: React.FormEvent) => void;
   onClose: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
+  const [userQuery, setUserQuery] = useState("");
+  const [friendFilter, setFriendFilter] = useState("");
+
+  const searchQ = userQuery.trim();
+  const { data: searchHits, isFetching: searchingUsers } = useQuery({
+    queryKey: ["invite-user-search", searchQ],
+    enabled: searchQ.length >= 2,
+    queryFn: async () => {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(searchQ)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Search failed");
+      return (json.data?.people ?? []) as Array<{
+        id: string;
+        full_name: string | null;
+        username: string | null;
+        email: string | null;
+        avatar_url: string | null;
+      }>;
+    },
+    staleTime: 15_000,
+  });
+
+  const filteredFriends = friends.filter((f) => {
+    const q = friendFilter.trim().toLowerCase();
+    if (!q) return true;
+    return [f.name, f.username, f.email]
+      .filter(Boolean)
+      .some((part) => String(part).toLowerCase().includes(q));
+  });
+
+  const people = (searchHits ?? []).filter((p) => !memberUserIds.has(p.id));
+
+  async function onSubmitUserLookup(e: React.FormEvent) {
+    e.preventDefault();
+    const raw = userQuery.trim().replace(/^@/, "");
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+    if (isEmail) {
+      await onAddByLookup({ email: raw });
+      setUserQuery("");
+      return;
+    }
+    if (raw.length < 3) {
+      toast.error("Enter at least 3 characters, or pick someone from the list");
+      return;
+    }
+    await onAddByLookup({ username: raw });
+    setUserQuery("");
+  }
 
   useEffect(() => {
     setMounted(true);
@@ -1784,42 +1872,141 @@ function InviteMembersModal({
                 {friends.length > 0 && (
                   <div className="space-y-2">
                     <Label>Friends</Label>
-                    <div className="flex flex-wrap gap-2">
-                      {friends.map((f) => (
-                        <Button
-                          key={f.id}
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => onAddFriend(f.id)}
-                        >
-                          <UserPlus className="h-3.5 w-3.5" />
-                          {f.name}
-                        </Button>
-                      ))}
-                    </div>
+                    {friends.length > 4 ? (
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={friendFilter}
+                          onChange={(e) => setFriendFilter(e.target.value)}
+                          placeholder="Filter friends…"
+                          className="pl-9"
+                          autoComplete="off"
+                        />
+                      </div>
+                    ) : null}
+                    {filteredFriends.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No friends match your filter.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {filteredFriends.map((f) => (
+                          <Button
+                            key={f.id}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => onAddFriend(f.id)}
+                            title={[f.username ? `@${f.username}` : null, f.email]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                            {f.name}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
-                <form onSubmit={onAddUsername} className="space-y-2">
-                  <Label htmlFor="add-username">Username</Label>
-                  <div className="flex gap-2">
+                <form onSubmit={(e) => void onSubmitUserLookup(e)} className="space-y-2">
+                  <Label htmlFor="add-user-search">Find user</Label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="add-username"
-                      value={username}
-                      onChange={(e) => onUsernameChange(e.target.value)}
-                      placeholder="alex"
+                      id="add-user-search"
+                      value={userQuery}
+                      onChange={(e) => setUserQuery(e.target.value)}
+                      placeholder="Search name, username, or email…"
+                      className="pl-9"
+                      autoComplete="off"
                     />
-                    <Button
-                      type="submit"
-                      disabled={busy || !username}
-                      size="icon"
-                      className="shrink-0"
-                    >
-                      {busy ? <Loader2 className="animate-spin" /> : <UserPlus />}
-                    </Button>
+                    {searchingUsers ? (
+                      <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                    ) : null}
                   </div>
+
+                  {searchQ.length >= 2 ? (
+                    <div className="overflow-hidden rounded-xl border border-border bg-muted/20">
+                      {people.length === 0 && !searchingUsers ? (
+                        <p className="px-4 py-3 text-sm text-muted-foreground">
+                          No users match “{searchQ}”
+                        </p>
+                      ) : (
+                        <ul className="divide-y divide-border">
+                          {people.map((p) => {
+                            const label = p.full_name || p.username || p.email || "User";
+                            const inGroup = memberUserIds.has(p.id);
+                            return (
+                              <li
+                                key={p.id}
+                                className="flex items-center justify-between gap-3 px-3 py-2.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium">{label}</p>
+                                  <p className="truncate text-xs text-muted-foreground">
+                                    {[
+                                      p.username ? `@${p.username}` : null,
+                                      p.email,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ") || "No username"}
+                                  </p>
+                                </div>
+                                {inGroup ? (
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    In group
+                                  </span>
+                                ) : (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={busy}
+                                    onClick={() => onAddFriend(p.id)}
+                                  >
+                                    {busy ? (
+                                      <Loader2 className="animate-spin" />
+                                    ) : (
+                                      <UserPlus className="h-3.5 w-3.5" />
+                                    )}
+                                    Add
+                                  </Button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {searchQ.length > 0 && searchQ.length < 2 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Type at least 2 characters to search, or enter an exact
+                      username / email below.
+                    </p>
+                  ) : null}
+
+                  <Button
+                    type="submit"
+                    disabled={
+                      busy ||
+                      (() => {
+                        const raw = userQuery.trim().replace(/^@/, "");
+                        if (!raw) return true;
+                        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return false;
+                        return raw.length < 3;
+                      })()
+                    }
+                    className="w-full"
+                    size="sm"
+                    variant="outline"
+                  >
+                    {busy ? <Loader2 className="animate-spin" /> : <UserPlus />}
+                    Add by exact username or email
+                  </Button>
                 </form>
 
                 <form onSubmit={onAddGuest} className="space-y-2">

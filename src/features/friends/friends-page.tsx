@@ -114,6 +114,7 @@ function formatReceiptDate(value: string | null) {
 export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
   const qc = useQueryClient();
   const [query, setQuery] = useState("");
+  const [friendsFilter, setFriendsFilter] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [busyUsername, setBusyUsername] = useState(false);
   const [unpaidModal, setUnpaidModal] = useState<FriendBalanceRow | null>(null);
@@ -179,8 +180,12 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
     return map;
   }, [data, currentUserId]);
 
-  async function sendRequest(payload: { username?: string; user_id?: string }) {
-    const key = payload.user_id ?? payload.username ?? "x";
+  async function sendRequest(payload: {
+    username?: string;
+    user_id?: string;
+    email?: string;
+  }) {
+    const key = payload.user_id ?? payload.email ?? payload.username ?? "x";
     if (payload.user_id) setBusyId(payload.user_id);
     else setBusyUsername(true);
     try {
@@ -204,14 +209,29 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
     }
   }
 
-  async function onSubmitUsername(e: React.FormEvent) {
+  async function onSubmitLookup(e: React.FormEvent) {
     e.preventDefault();
-    const username = query.trim().replace(/^@/, "");
-    if (username.length < 3) {
+    const raw = query.trim().replace(/^@/, "");
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+    if (isEmail) {
+      await sendRequest({ email: raw.toLowerCase() });
+      return;
+    }
+    if (raw.length < 3) {
       toast.error("Enter at least 3 characters, or pick someone from the list");
       return;
     }
-    await sendRequest({ username });
+    await sendRequest({ username: raw });
+  }
+
+  function matchesFriendFilter(f: FriendRow) {
+    const q = friendsFilter.trim().toLowerCase();
+    if (!q) return true;
+    const p = otherProfile(f);
+    if (!p) return false;
+    return [p.full_name, p.username, p.email]
+      .filter(Boolean)
+      .some((part) => String(part).toLowerCase().includes(q));
   }
 
   async function respond(id: string, status: "accepted" | "blocked") {
@@ -234,6 +254,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
     (f) => f.status === "pending" && f.addressee_id === currentUserId
   );
   const accepted = (data ?? []).filter((f) => f.status === "accepted");
+  const filteredAccepted = accepted.filter(matchesFriendFilter);
   const outgoing = (data ?? []).filter(
     (f) => f.status === "pending" && f.requester_id === currentUserId
   );
@@ -262,14 +283,14 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
           Friends
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Search by name or username. Tap a friend in your group to see what
+          Search by name, username, or email. Tap a friend in your group to see what
           they still owe.
         </p>
       </div>
 
       <Card>
         <CardContent className="p-4 sm:p-6">
-          <form onSubmit={(e) => void onSubmitUsername(e)} className="space-y-3">
+          <form onSubmit={(e) => void onSubmitLookup(e)} className="space-y-3">
             <div className="space-y-2">
               <Label htmlFor="uname">Find people</Label>
               <div className="relative">
@@ -278,7 +299,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                   id="uname"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search name or username…"
+                  placeholder="Search name, username, or email…"
                   className="pl-9"
                   autoComplete="off"
                 />
@@ -317,7 +338,12 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                                 {label}
                               </p>
                               <p className="truncate text-xs text-muted-foreground">
-                                {p.username ? `@${p.username}` : "No username"}
+                                {[
+                                  p.username ? `@${p.username}` : null,
+                                  p.email,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ") || "No username"}
                               </p>
                             </div>
                           </div>
@@ -362,7 +388,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
 
             {searchQ.length > 0 && searchQ.length < 2 && (
               <p className="text-xs text-muted-foreground">
-                Type at least 2 characters to see matching users.
+                Type at least 2 characters to search by name, username, or email.
               </p>
             )}
 
@@ -370,14 +396,22 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
               <Button
                 type="submit"
                 variant="outline"
-                disabled={busyUsername || searchQ.length < 3}
+                disabled={
+                  busyUsername ||
+                  (() => {
+                    const raw = query.trim().replace(/^@/, "");
+                    if (!raw) return true;
+                    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return false;
+                    return raw.length < 3;
+                  })()
+                }
               >
                 {busyUsername ? (
                   <Loader2 className="animate-spin" />
                 ) : (
                   <UserPlus />
                 )}
-                Send by exact username
+                Send by exact username or email
               </Button>
             </div>
           </form>
@@ -429,9 +463,28 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
       )}
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-muted-foreground">Friends</h2>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-sm font-medium text-muted-foreground">Friends</h2>
+          {accepted.length > 0 ? (
+            <div className="relative w-full sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={friendsFilter}
+                onChange={(e) => setFriendsFilter(e.target.value)}
+                placeholder="Filter by name or email…"
+                className="h-9 pl-9"
+                autoComplete="off"
+              />
+            </div>
+          ) : null}
+        </div>
         {accepted.length === 0 && !isLoading && (
           <p className="text-sm text-muted-foreground">No friends yet.</p>
+        )}
+        {accepted.length > 0 && filteredAccepted.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            No friends match “{friendsFilter.trim()}”.
+          </p>
         )}
         {(isLoading || balancesLoading) && accepted.length > 0 && (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
@@ -440,9 +493,9 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
             ))}
           </div>
         )}
-        {!isLoading && !balancesLoading && accepted.length > 0 && (
+        {!isLoading && !balancesLoading && filteredAccepted.length > 0 && (
           <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-            {accepted.map((f) => {
+            {filteredAccepted.map((f) => {
               const profile = otherProfile(f);
               const label = otherName(f);
               const balance = balanceForFriend(f);
@@ -482,6 +535,10 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                         {profile?.username ? (
                           <p className="truncate text-[9px] text-muted-foreground">
                             @{profile.username}
+                          </p>
+                        ) : profile?.email ? (
+                          <p className="truncate text-[9px] text-muted-foreground">
+                            {profile.email}
                           </p>
                         ) : null}
                       </div>
