@@ -10,6 +10,7 @@ import { moneyNumber } from "@/lib/money";
 import { getMemberGroupPayTotal } from "@/lib/group-member-payments";
 import { amountsMatch, todayInManila } from "@/lib/payment-proof";
 import { extractPaymentProofFields } from "@/services/ocr/extract-payment-proof";
+import { normalizeUploadImage } from "@/lib/convert-heic-server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -85,14 +86,28 @@ export async function POST(request: Request, { params }: Params) {
         : `payment-proof-${Date.now()}.jpg`;
     const mime = normalizeMime(file.type, fileName);
     if (!ALLOWED.has(mime)) {
-      return fail("Proof must be a PNG, JPEG, WebP, or GIF image");
+      return fail("Proof must be a PNG, JPEG, WebP, GIF, or HEIC image");
     }
     if (file.size > MAX_BYTES) return fail("Proof image too large (max 10MB)");
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    let buffer: Buffer = Buffer.from(await file.arrayBuffer());
+    let normalizedName = fileName;
+    let normalizedMime = mime;
+    try {
+      const normalized = await normalizeUploadImage(buffer, mime, fileName);
+      buffer = Buffer.from(normalized.buffer);
+      normalizedMime = normalized.mimeType;
+      normalizedName = normalized.fileName;
+    } catch (err) {
+      return fail(
+        err instanceof Error ? err.message : "Could not read HEIC image",
+        400
+      );
+    }
+
     const ext =
-      fileName.split(".").pop()?.toLowerCase() ||
-      (mime === "image/png" ? "png" : "jpg");
+      normalizedName.split(".").pop()?.toLowerCase() ||
+      (normalizedMime === "image/png" ? "png" : "jpg");
     const storagePath = `${user.id}/${groupId}/${membership.id}.${ext}`;
 
     let ocrAmount: number | null = null;
@@ -100,7 +115,11 @@ export async function POST(request: Request, { params }: Params) {
     let ocrMeta: Record<string, unknown> = {};
 
     try {
-      const fields = await extractPaymentProofFields(buffer, mime, fileName);
+      const fields = await extractPaymentProofFields(
+        buffer,
+        normalizedMime,
+        normalizedName
+      );
       ocrAmount = fields.amount;
       ocrDate = fields.date;
       ocrMeta = {

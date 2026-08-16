@@ -7,8 +7,12 @@ export const PAYMENT_PROOF_TIMEZONE = "Asia/Manila";
 export type PaymentProofParse = {
   amount: number | null;
   date: string | null; // YYYY-MM-DD
+  transactionNumber: string | null;
   rawHints: string[];
 };
+
+const TXN_LABEL_RE =
+  /(?:ref(?:\.|\s)?(?:no|number|#)?|reference(?:\s*(?:no|number|#))?|transaction(?:\s*(?:id|no|number|#))?|txn(?:\s*(?:id|no|number|#))?)\s*[:\-#]?\s*([A-Z0-9][A-Z0-9\-]{5,39})/gi;
 
 const AMOUNT_LABEL_RE =
   /(?:amount|total|you\s+sent|sent|transfer(?:red)?|paid|payment|bayad)\s*[:\-]?\s*(?:php|₱)?\s*([\d,]+(?:\.\d{1,2})?)/i;
@@ -136,9 +140,20 @@ export function parsePaymentProofText(raw: string): PaymentProofParse {
   const dates = extractDates(text);
   if (dates[0]) hints.push(`date:${dates[0]}`);
 
+  let transactionNumber: string | null = null;
+  for (const m of text.matchAll(TXN_LABEL_RE)) {
+    const candidate = m[1]?.trim().toUpperCase();
+    if (candidate && candidate.length >= 6) {
+      transactionNumber = candidate;
+      hints.push(`txn:${candidate}`);
+      break;
+    }
+  }
+
   return {
     amount: pickBestAmount(amounts),
     date: dates[0] ?? null,
+    transactionNumber,
     rawHints: hints,
   };
 }

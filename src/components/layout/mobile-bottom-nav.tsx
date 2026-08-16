@@ -9,6 +9,7 @@ import {
   Receipt,
   Users,
   UserPlus,
+  HandCoins,
   Upload,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
@@ -26,6 +27,7 @@ const items = [
   { href: "/receipts", label: "Receipts", icon: Receipt },
   { href: "/receipts/new", label: "Scan", icon: Upload, primary: true },
   { href: "/groups", label: "Groups", icon: Users },
+  { href: "/pal-owes-me", label: "Owes me", icon: HandCoins },
   { href: "/friends", label: "Friends", icon: UserPlus },
 ];
 

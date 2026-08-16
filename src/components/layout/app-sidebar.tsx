@@ -9,6 +9,7 @@ import {
   Receipt,
   Users,
   UserPlus,
+  HandCoins,
   Settings,
   Upload,
   BarChart3,
@@ -30,6 +31,7 @@ const nav = [
   { href: "/receipts", label: "Receipts", icon: Receipt },
   { href: "/groups", label: "Groups", icon: Users },
   { href: "/friends", label: "Friends", icon: UserPlus },
+  { href: "/pal-owes-me", label: "Pal owes me", icon: HandCoins },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

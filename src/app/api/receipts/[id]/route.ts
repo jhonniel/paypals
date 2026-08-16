@@ -408,13 +408,16 @@ export async function DELETE(_request: Request, { params }: Params) {
       .select("storage_path")
       .eq("receipt_id", id);
 
-    const { error } = await supabase
+    const { data: deleted, error } = await supabase
       .from("receipts")
       .delete()
       .eq("id", id)
-      .eq("created_by", user.id);
+      .eq("created_by", user.id)
+      .select("id")
+      .maybeSingle();
 
     if (error) return fail(error.message, 400);
+    if (!deleted) return notFound("Receipt not found");
 
     const paths = (images ?? []).map((i) => i.storage_path).filter(Boolean);
     if (paths.length) {

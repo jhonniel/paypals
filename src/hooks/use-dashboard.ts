@@ -24,15 +24,56 @@ export type ConfirmedPaymentRow = {
   direction: "received" | "sent";
 };
 
+export type PalOwedToYouRow = {
+  debtorId: string;
+  name: string;
+  amount: number;
+  currency: string;
+  debtCount: number;
+};
+
+export type PalOweToOthersRow = {
+  creditorId: string;
+  name: string;
+  amount: number;
+  currency: string;
+  debtCount: number;
+};
+
+export type UnclaimedReceiptRow = {
+  receiptId: string;
+  merchant: string | null;
+  groupId: string;
+  groupName: string;
+  currency: string;
+  items: Array<{
+    id: string;
+    name: string;
+    label: string;
+    value: number;
+  }>;
+  itemCount: number;
+  totalValue: number;
+};
+
 export type DashboardData = {
   stats: {
-    totalExpenses: number;
+    userSpent: number;
+    userSpentThisMonth: number;
+    overallSpent: number;
+    userOwes: number;
     monthlySpend: number;
     groupsCount: number;
     friendsCount: number;
     unreadNotifications: number;
     mostActiveGroup: string | null;
     totalOwedToYou: number;
+    palDebtsOpenTotal: number;
+    palDebtsOweTotal: number;
+    balanceToCollect: number;
+    unclaimedItemCount: number;
+    unclaimedItemValue: number;
+    collectPendingCount: number;
     totalPaymentsReceived: number;
     totalPaymentsSent: number;
     paymentsReceivedThisMonth: number;
@@ -57,6 +98,9 @@ export type DashboardData = {
   }>;
   monthlyChart: Array<{ label: string; total: number; payments?: number }>;
   owedToYou: OwedToYouRow[];
+  palOwedToYou: PalOwedToYouRow[];
+  palOweToOthers: PalOweToOthersRow[];
+  unclaimedReceipts: UnclaimedReceiptRow[];
   confirmedPayments: ConfirmedPaymentRow[];
 };
 

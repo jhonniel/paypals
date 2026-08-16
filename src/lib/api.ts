@@ -15,6 +15,7 @@ export type ApiSuccessBody<T> = {
     page?: number;
     pageSize?: number;
     total?: number;
+    unread_count?: number;
   };
 };
 

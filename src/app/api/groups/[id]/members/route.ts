@@ -99,12 +99,24 @@ export async function POST(request: Request, { params }: Params) {
       .eq("id", groupId)
       .single();
 
-    if (userId) {
+    if (userId && userId !== user.id) {
+      const { data: inviter } = await supabase
+        .from("profiles")
+        .select("full_name, username")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const inviterName =
+        inviter?.full_name?.trim() ||
+        (inviter?.username ? `@${inviter.username}` : null) ||
+        "Someone";
+      const groupName = group?.name ?? "a group";
+
       await supabase.from("notifications").insert({
         user_id: userId,
         type: "invitation",
-        title: `Joined ${group?.name ?? "a group"}`,
-        body: `You were added to ${group?.name ?? "a group"}.`,
+        title: `Added to ${groupName}`,
+        body: `${inviterName} added you to ${groupName}.`,
         link: `/groups/${groupId}`,
       });
     }

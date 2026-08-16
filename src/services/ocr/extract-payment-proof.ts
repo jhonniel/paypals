@@ -21,6 +21,7 @@ export async function extractPaymentProofFields(
 ): Promise<{
   amount: number | null;
   date: string | null;
+  transactionNumber: string | null;
   text: string;
   provider: string;
   raw: unknown;
@@ -76,6 +77,7 @@ export async function extractPaymentProofFields(
     return {
       amount: parsed.amount,
       date: parsed.date,
+      transactionNumber: parsed.transactionNumber,
       text,
       provider: `ocrspace-e${engine}`,
       raw: { ...json, parseHints: parsed.rawHints },
@@ -108,6 +110,7 @@ function fieldsFromOcrResult(result: OcrResult) {
   return {
     amount,
     date,
+    transactionNumber: parsed.transactionNumber,
     text,
     provider: result.provider,
     raw: result.raw,

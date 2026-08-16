@@ -19,6 +19,15 @@
     "src/app/api/ocr/[id]/route.ts": {
       "maxDuration": 60,
       "memory": 1024
+    },
+    "src/app/api/cron/keep-awake/route.ts": {
+      "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/keep-awake",
+      "schedule": "0 8 */4 * *"
+    }
+  ]
 }

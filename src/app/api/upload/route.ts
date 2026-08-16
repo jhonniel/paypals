@@ -7,6 +7,7 @@ import {
 import { computeReceiptTotals, moneyNumber } from "@/lib/money";
 import { tryReceiptDate, tryReceiptTime } from "@/lib/receipt-datetime";
 import { fail, unauthorized, serverError, created } from "@/lib/api";
+import { normalizeUploadImage } from "@/lib/convert-heic-server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -80,9 +81,9 @@ export async function POST(request: Request) {
       }
     }
 
-    const fileName =
+    let fileName =
       file instanceof File && file.name ? file.name : `receipt-${Date.now()}.jpg`;
-    const mime = normalizeMime(file.type, fileName);
+    let mime = normalizeMime(file.type, fileName);
     if (!ALLOWED.has(mime) && !ALLOWED.has(file.type)) {
       return fail(`Unsupported file type: ${file.type || mime || "unknown"}`);
     }
@@ -93,7 +94,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    let buffer: Buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      const normalized = await normalizeUploadImage(buffer, mime, fileName);
+      buffer = Buffer.from(normalized.buffer);
+      mime = normalized.mimeType;
+      fileName = normalized.fileName;
+    } catch (err) {
+      return fail(
+        err instanceof Error ? err.message : "Could not read image file",
+        400
+      );
+    }
+
     const receiptId = crypto.randomUUID();
     const ext =
       fileName.split(".").pop()?.toLowerCase() ||

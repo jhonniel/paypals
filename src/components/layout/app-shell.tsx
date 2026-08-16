@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AppTopbar } from "@/components/layout/app-topbar";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { AnnouncementGate } from "@/features/announcements/announcement-gate";
 import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
@@ -103,6 +104,7 @@ export function AppShell({
       </div>
 
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+      <AnnouncementGate userId={profile?.id ?? null} />
     </div>
   );
 }

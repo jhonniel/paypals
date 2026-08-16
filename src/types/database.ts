@@ -29,7 +29,8 @@ export type NotificationType =
   | "receipt_updated"
   | "member_joined"
   | "split_completed"
-  | "payment_reminder";
+  | "payment_reminder"
+  | "announcement";
 
 export type PaymentMethodType = "gcash" | "maya" | "bank" | "other";
 

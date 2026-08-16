@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -20,6 +20,8 @@ import {
   ZoomIn,
   Upload,
   CheckCircle2,
+  Check,
+  HandCoins,
   RotateCw,
   MoreHorizontal,
 } from "lucide-react";
@@ -41,12 +43,15 @@ import { publicEnv } from "@/lib/env";
 import { formatGroupInviteCode } from "@/lib/group-invite-code";
 import { itemSplitPerPersonAmount } from "@/lib/splits";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
+import { GroupAddReceiptModal } from "@/features/groups/group-add-receipt-modal";
 import { readApiJson } from "@/lib/api-client";
+import { prepareImageFileForUpload } from "@/lib/convert-heic-client";
 import {
   paymentMethodDisplayLabel,
   type PaymentMethod,
 } from "@/lib/payment-methods";
 import { cn } from "@/utils/cn";
+import { ConfirmModal } from "@/components/confirm-modal";
 import { ItemBreakdownList } from "@/components/item-breakdown-list";
 import type { ReceiptSubItem } from "@/lib/receipt-sub-items";
 import {
@@ -165,6 +170,7 @@ type GroupDetail = {
     rejection_reason: string | null;
     manual?: boolean;
     bill_payer?: boolean;
+    moved_to_pal?: boolean;
   }>;
   invite_url: string;
 };
@@ -175,6 +181,55 @@ function money(value: number, currency = "PHP") {
     currency,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function memberLabel(m: GroupDetail["members"][number]) {
+  return (
+    m.profiles?.full_name ||
+    m.profiles?.username ||
+    m.guest_name ||
+    m.guest_email ||
+    "Member"
+  );
+}
+
+function memberPaymentStatus(
+  m: GroupDetail["members"][number],
+  data: Pick<GroupDetail, "member_payments" | "payment_proofs">
+) {
+  const pay = data.member_payments?.find((p) => p.member_id === m.id);
+  const payTotal = pay?.total ?? 0;
+  const owesTotal = pay?.owes ?? payTotal;
+  const isBillPayer = pay?.is_bill_payer ?? false;
+  const payCurrency = pay?.currency ?? "PHP";
+  const proof = data.payment_proofs?.find((p) => p.member_id === m.id);
+  const proofMeta = {
+    manual: Boolean(proof?.manual),
+    bill_payer: Boolean(proof?.bill_payer),
+    moved_to_pal: Boolean(proof?.moved_to_pal),
+  };
+  const isMovedToPal = proofMeta.moved_to_pal && proof?.status === "paid";
+  const isPaid =
+    proof?.status === "paid" &&
+    (isBillPayer && owesTotal <= 0
+      ? proofMeta.bill_payer || proofMeta.manual
+      : owesTotal > 0 &&
+        (proofMeta.manual ||
+          proofMeta.moved_to_pal ||
+          Math.abs((proof.expected_amount ?? 0) - owesTotal) <= 1));
+
+  return {
+    pay,
+    payTotal,
+    owesTotal,
+    isBillPayer,
+    payCurrency,
+    proof,
+    proofMeta,
+    isMovedToPal,
+    isPaid,
+    items: pay?.items ?? [],
+  };
 }
 
 function titleCaseItem(name: string) {
@@ -210,21 +265,65 @@ function formatReceiptWhen(date: string | null, time: string | null) {
 
 const PREVIEW_ITEMS = 5;
 
+type ReceiptExtraLine = {
+  id: string;
+  name: string;
+  amount: number;
+};
+
+function receiptExtraLines(r: GroupReceipt): ReceiptExtraLine[] {
+  const lines: ReceiptExtraLine[] = [];
+  const discounts =
+    r.discounts?.length
+      ? r.discounts
+      : Number(r.discount) > 0
+        ? [{ label: "Discount", amount: Number(r.discount) }]
+        : [];
+  for (const d of discounts) {
+    lines.push({
+      id: `discount-${d.label}-${d.amount}`,
+      name: d.label,
+      amount: -Number(d.amount),
+    });
+  }
+  if (Number(r.tax) > 0) {
+    lines.push({ id: "tax", name: "Tax", amount: Number(r.tax) });
+  }
+  if (Number(r.service_charge) > 0) {
+    lines.push({
+      id: "service",
+      name: "Service charge",
+      amount: Number(r.service_charge),
+    });
+  }
+  if (Number(r.tip) > 0) {
+    lines.push({ id: "tip", name: "Tip", amount: Number(r.tip) });
+  }
+  return lines;
+}
+
 function GroupReceiptCard({
   receipt: r,
   onPickItems,
   showUnclaimed,
   groupMemberCount = 0,
+  canDelete,
+  onDelete,
+  deleting,
 }: {
   receipt: GroupReceipt;
   onPickItems?: () => void;
   showUnclaimed?: boolean;
   groupMemberCount?: number;
+  canDelete?: boolean;
+  onDelete?: () => void;
+  deleting?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [imageBroken, setImageBroken] = useState(false);
   const currency = r.currency || "PHP";
+  const extraLines = receiptExtraLines(r);
   const visible = expanded ? r.items : r.items.slice(0, PREVIEW_ITEMS);
   const hiddenCount = Math.max(0, r.items.length - PREVIEW_ITEMS);
   const when = formatReceiptWhen(r.receipt_date, r.receipt_time);
@@ -333,7 +432,7 @@ function GroupReceiptCard({
         </div>
       ) : null}
 
-      {r.items.length > 0 ? (
+      {r.items.length > 0 || extraLines.length > 0 ? (
         <div className="mt-3 max-w-lg">
           <ul className="space-y-2">
             {visible.map((item) => {
@@ -402,6 +501,28 @@ function GroupReceiptCard({
                 </li>
               );
             })}
+            {extraLines.map((line) => (
+              <li key={line.id} className="text-sm">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2">
+                  <span className="truncate font-medium text-muted-foreground">
+                    {line.name}
+                  </span>
+                  <span />
+                  <span
+                    className={cn(
+                      "min-w-[4.75rem] text-right tabular-nums",
+                      line.amount < 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {line.amount < 0
+                      ? `−${money(Math.abs(line.amount), currency)}`
+                      : money(line.amount, currency)}
+                  </span>
+                </div>
+              </li>
+            ))}
           </ul>
 
           {hiddenCount > 0 && (
@@ -420,40 +541,6 @@ function GroupReceiptCard({
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-2 border-t border-border pt-3">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground sm:grid-cols-[auto_auto]">
-          {(r.discounts?.length ? r.discounts : Number(r.discount) > 0 ? [{ label: "Discount", amount: Number(r.discount) }] : []).map(
-            (d) => (
-              <Fragment key={`${d.label}-${d.amount}`}>
-                <dt>{d.label}</dt>
-                <dd className="tabular-nums text-right sm:text-left">
-                  −{money(Number(d.amount), currency)}
-                </dd>
-              </Fragment>
-            )
-          )}
-          {Number(r.discount) > 0 && (r.discounts?.length ?? 0) > 1 && (
-            <>
-              <dt className="font-medium text-foreground">Total discounts</dt>
-              <dd className="font-medium tabular-nums text-right text-foreground sm:text-left">
-                −{money(Number(r.discount), currency)}
-              </dd>
-            </>
-          )}
-          {Number(r.service_charge) > 0 && (
-            <>
-              <dt>Service</dt>
-              <dd className="tabular-nums text-right sm:text-left">
-                {money(Number(r.service_charge), currency)}
-              </dd>
-            </>
-          )}
-          {Number(r.tip) > 0 && (
-            <>
-              <dt>Tip</dt>
-              <dd className="tabular-nums text-right sm:text-left">
-                {money(Number(r.tip), currency)}
-              </dd>
-            </>
-          )}
           <dt className="font-medium text-foreground">Amount due</dt>
           <dd className="font-semibold tabular-nums text-right text-foreground sm:text-left">
             {money(Number(r.total), currency)}
@@ -469,6 +556,23 @@ function GroupReceiptCard({
             onClick={onPickItems}
           >
             Pick what you got <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+        {canDelete && onDelete ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={deleting}
+            onClick={onDelete}
+          >
+            {deleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            Delete
           </Button>
         ) : null}
       </div>
@@ -558,6 +662,7 @@ export function GroupDetailView({
   const [guestEmail, setGuestEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [addReceiptOpen, setAddReceiptOpen] = useState(false);
   const [claimReceiptId, setClaimReceiptId] = useState<string | null>(null);
   const [claimForMember, setClaimForMember] = useState<{
     memberId: string;
@@ -565,6 +670,11 @@ export function GroupDetailView({
   } | null>(null);
   const [uploadingProof, setUploadingProof] = useState(false);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
+  const [movingToPal, setMovingToPal] = useState(false);
+  const [moveToPalOpen, setMoveToPalOpen] = useState(false);
+  const [selectedMoveMemberIds, setSelectedMoveMemberIds] = useState<string[]>(
+    []
+  );
   const [markPaidConfirm, setMarkPaidConfirm] = useState<{
     memberId: string;
     name: string;
@@ -574,6 +684,15 @@ export function GroupDetailView({
   const [flippedMembers, setFlippedMembers] = useState<Set<string>>(new Set());
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deletingGroup, setDeletingGroup] = useState(false);
+  const [deletingReceiptId, setDeletingReceiptId] = useState<string | null>(null);
+  const [deleteReceiptConfirm, setDeleteReceiptConfirm] = useState<{
+    receiptId: string;
+    merchant: string | null;
+  } | null>(null);
+  const [removeMemberConfirm, setRemoveMemberConfirm] = useState<{
+    memberId: string;
+    name: string;
+  } | null>(null);
 
   function toggleMemberFlip(memberId: string) {
     setFlippedMembers((prev) => {
@@ -591,6 +710,11 @@ export function GroupDetailView({
   const isCreator =
     data?.group.created_by === currentUserId || data?.my_role === "owner";
   const isOwner = data?.my_role === "owner";
+  const myMemberPay = data?.member_payments?.find(
+    (p) => p.member_id === data?.my_member_id
+  );
+  const isBillPayer = Boolean(myMemberPay?.is_bill_payer);
+  const canMoveToPal = canManage || isBillPayer;
   const groupUnclaimedSummary = canManage
     ? (data?.receipts ?? []).reduce(
         (acc, receipt) => {
@@ -753,7 +877,6 @@ export function GroupDetailView({
   }
 
   async function removeMember(memberId: string) {
-    if (!confirm("Remove this member from the group?")) return;
     setBusy(true);
     try {
       const res = await fetch(
@@ -763,6 +886,7 @@ export function GroupDetailView({
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       toast.success("Removed");
+      setRemoveMemberConfirm(null);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
@@ -786,6 +910,23 @@ export function GroupDetailView({
       toast.error(err instanceof Error ? err.message : "Could not delete group");
     } finally {
       setDeletingGroup(false);
+    }
+  }
+
+  async function deleteReceipt(receiptId: string) {
+    setDeletingReceiptId(receiptId);
+    try {
+      const res = await fetch(`/api/receipts/${receiptId}`, { method: "DELETE" });
+      const parsed = await readApiJson<{ data: { deleted: boolean } }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      toast.success("Receipt deleted");
+      setDeleteReceiptConfirm(null);
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      await qc.invalidateQueries({ queryKey: ["groups"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete receipt");
+    } finally {
+      setDeletingReceiptId(null);
     }
   }
 
@@ -834,8 +975,9 @@ export function GroupDetailView({
   async function uploadPaymentProof(file: File) {
     setUploadingProof(true);
     try {
+      const ready = await prepareImageFileForUpload(file);
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", ready);
       const res = await fetch(`/api/groups/${groupId}/payment-proof`, {
         method: "POST",
         body: form,
@@ -868,10 +1010,53 @@ export function GroupDetailView({
       setMarkPaidConfirm(null);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
       await qc.invalidateQueries({ queryKey: ["friends-balances"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
       setMarkingPaidId(null);
+    }
+  }
+
+  async function moveMembersToPalDebt(memberIds: string[]) {
+    if (memberIds.length === 0) return;
+    setMovingToPal(true);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/move-to-pal-debt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_ids: memberIds }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+
+      const moved = (json.data?.moved ?? []) as Array<{ amount: number }>;
+      const failed = (json.data?.failed ?? []) as Array<{ error: string }>;
+      const total = Number(json.data?.total_amount ?? 0);
+      const currency = (json.data?.currency as string) ?? "PHP";
+
+      if (failed.length > 0 && moved.length > 0) {
+        toast.success(
+          `Moved ${moved.length} member${moved.length === 1 ? "" : "s"} (${money(total, currency)}) · ${failed.length} skipped`
+        );
+      } else {
+        toast.success(
+          moved.length === 1
+            ? "Moved to Pal owes me — they no longer owe in this group"
+            : `Moved ${moved.length} members (${money(total, currency)}) to Pal owes me`
+        );
+      }
+
+      setMoveToPalOpen(false);
+      setSelectedMoveMemberIds([]);
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      await qc.invalidateQueries({ queryKey: ["friends-balances"] });
+      await qc.invalidateQueries({ queryKey: ["pal-debts"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setMovingToPal(false);
     }
   }
 
@@ -895,6 +1080,35 @@ export function GroupDetailView({
       setBusy(false);
     }
   }
+
+  const moveToPalMembers = useMemo(() => {
+    if (!data) return [];
+    return data.members
+      .filter((m) => m.id !== data.my_member_id)
+      .map((m) => {
+        const status = memberPaymentStatus(m, data);
+        let ineligibleReason: string | null = null;
+        if (!m.user_id) {
+          ineligibleReason = "Needs a Paypals account";
+        } else if (status.isMovedToPal) {
+          ineligibleReason = "Already moved to Pal owes me";
+        } else if (status.isPaid) {
+          ineligibleReason = "Already marked paid";
+        } else if (status.owesTotal <= 0) {
+          ineligibleReason = "Nothing owed in this group";
+        }
+        return {
+          memberId: m.id,
+          name: memberLabel(m),
+          owesTotal: status.owesTotal,
+          currency: status.payCurrency,
+          eligible: ineligibleReason == null,
+          ineligibleReason,
+        };
+      });
+  }, [data]);
+
+  const moveToPalEligible = moveToPalMembers.filter((m) => m.eligible);
 
   if (isLoading) return <Skeleton className="h-64 w-full" />;
   if (error || !data) {
@@ -994,11 +1208,15 @@ export function GroupDetailView({
             </CardDescription>
           </div>
           {isCreator && (
-            <Button variant="outline" size="sm" asChild className="self-start sm:self-auto">
-              <Link href={`/receipts/new?group=${groupId}`}>
-                <Receipt className="h-3.5 w-3.5" />
-                Add receipt
-              </Link>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="self-start sm:self-auto"
+              onClick={() => setAddReceiptOpen(true)}
+            >
+              <Receipt className="h-3.5 w-3.5" />
+              Add receipt
             </Button>
           )}
         </CardHeader>
@@ -1011,8 +1229,13 @@ export function GroupDetailView({
                   : "No receipts yet. Only the group creator can upload — check back soon."}
               </p>
               {isCreator && (
-                <Button className="mt-4" variant="outline" asChild>
-                  <Link href={`/receipts/new?group=${groupId}`}>Upload a receipt</Link>
+                <Button
+                  type="button"
+                  className="mt-4"
+                  variant="outline"
+                  onClick={() => setAddReceiptOpen(true)}
+                >
+                  Add a receipt
                 </Button>
               )}
             </div>
@@ -1023,6 +1246,14 @@ export function GroupDetailView({
                 receipt={r}
                 groupMemberCount={data.member_count ?? data.members.length}
                 showUnclaimed={canManage}
+                canDelete={r.created_by === currentUserId}
+                deleting={deletingReceiptId === r.id}
+                onDelete={() =>
+                  setDeleteReceiptConfirm({
+                    receiptId: r.id,
+                    merchant: r.merchant,
+                  })
+                }
                 onPickItems={
                   data.my_member_id
                     ? () => setClaimReceiptId(r.id)
@@ -1065,8 +1296,31 @@ export function GroupDetailView({
               </Button>
             ) : null}
           </div>
-          {canManage ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5">
+          {canMoveToPal ? (
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full justify-center sm:w-auto"
+                disabled={busy || movingToPal}
+                onClick={() => {
+                  setSelectedMoveMemberIds(
+                    moveToPalEligible.map((m) => m.memberId)
+                  );
+                  setMoveToPalOpen(true);
+                }}
+              >
+                <HandCoins className="h-3.5 w-3.5" />
+                Move to Pal owes me
+              </Button>
+              {!isBillPayer && canManage ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Balance is added to the bill payer&apos;s Pal owes me list.
+                </p>
+              ) : null}
+              {canManage ? (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">Visible to group</p>
                 <p className="text-xs text-muted-foreground">
@@ -1079,39 +1333,29 @@ export function GroupDetailView({
                 onCheckedChange={(v) => void setMembersVisible(v)}
               />
             </div>
+              ) : null}
+            </div>
           ) : null}
         </CardHeader>
         <CardContent className="p-4 pt-0">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {data.members.map((m) => {
-              const label =
-                m.profiles?.full_name ||
-                m.profiles?.username ||
-                m.guest_name ||
-                m.guest_email ||
-                "Member";
+              const label = memberLabel(m);
               const isGuest = Boolean(m.guest_name && !m.user_id);
               const isMe = m.id === data.my_member_id;
               const isOwnerSeat = m.role === "owner";
-              const pay = data.member_payments?.find((p) => p.member_id === m.id);
-              const payTotal = pay?.total ?? 0;
-              const owesTotal = pay?.owes ?? payTotal;
-              const isBillPayer = pay?.is_bill_payer ?? false;
-              const payCurrency = pay?.currency ?? "PHP";
-              const items = pay?.items ?? [];
+              const {
+                payTotal,
+                owesTotal,
+                isBillPayer,
+                payCurrency,
+                proof,
+                proofMeta,
+                isMovedToPal,
+                isPaid,
+                items,
+              } = memberPaymentStatus(m, data);
               const initial = label.trim().charAt(0).toUpperCase() || "?";
-              const proof = data.payment_proofs?.find((p) => p.member_id === m.id);
-              const proofMeta = {
-                manual: Boolean(proof?.manual),
-                bill_payer: Boolean(proof?.bill_payer),
-              };
-              const isPaid =
-                proof?.status === "paid" &&
-                (isBillPayer && owesTotal <= 0
-                  ? proofMeta.bill_payer || proofMeta.manual
-                  : owesTotal > 0 &&
-                    (proofMeta.manual ||
-                      Math.abs((proof.expected_amount ?? 0) - owesTotal) <= 1));
               const canFlip = (canManage || isMe) && items.length > 0;
               const isFlipped = canFlip && flippedMembers.has(m.id);
               return (
@@ -1190,11 +1434,25 @@ export function GroupDetailView({
                           </p>
                         </>
                       ) : isPaid ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Paid
-                          {proof?.manual ? (
-                            <span className="font-normal opacity-80">· manual</span>
+                        <span className="inline-flex flex-col items-center gap-1">
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold",
+                              isMovedToPal
+                                ? "bg-violet-500/15 text-violet-700 dark:text-violet-300"
+                                : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            )}
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            {isMovedToPal ? "Moved to Pal owes me" : "Paid"}
+                            {!isMovedToPal && proof?.manual ? (
+                              <span className="font-normal opacity-80">· manual</span>
+                            ) : null}
+                          </span>
+                          {isMovedToPal ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              Balance tracked outside this group
+                            </span>
                           ) : null}
                         </span>
                       ) : (
@@ -1339,7 +1597,7 @@ export function GroupDetailView({
                       <label className="flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-3 text-center hover:bg-muted/40">
                         <input
                           type="file"
-                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif,.heic,.heif"
                           className="sr-only"
                           disabled={uploadingProof}
                           onChange={(e) => {
@@ -1376,13 +1634,13 @@ export function GroupDetailView({
 
                   {canManage &&
                     (owesTotal > 0 || (data.receipts?.length ?? 0) > 0) && (
-                      <div className="mt-2 flex gap-1.5">
-                        {owesTotal > 0 && (
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        {owesTotal > 0 && !isMovedToPal && (
                           <Button
                             type="button"
                             size="sm"
                             variant={isPaid ? "outline" : "secondary"}
-                            className="h-8 min-w-0 flex-1 px-2 text-[11px]"
+                            className="h-8 min-w-0 w-full px-2 text-[11px]"
                             disabled={busy || markingPaidId === m.id}
                             onClick={() =>
                               setMarkPaidConfirm({
@@ -1407,7 +1665,7 @@ export function GroupDetailView({
                             type="button"
                             size="sm"
                             variant="secondary"
-                            className="h-8 min-w-0 flex-1 px-2 text-[11px]"
+                            className="h-8 min-w-0 w-full px-2 text-[11px]"
                             onClick={() =>
                               setClaimForMember({ memberId: m.id, name: label })
                             }
@@ -1489,7 +1747,9 @@ export function GroupDetailView({
                         variant="ghost"
                         className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                         disabled={busy}
-                        onClick={() => void removeMember(m.id)}
+                        onClick={() =>
+                          setRemoveMemberConfirm({ memberId: m.id, name: label })
+                        }
                       >
                         <Trash2 className="h-3 w-3" />
                         Remove
@@ -1566,6 +1826,17 @@ export function GroupDetailView({
         </CardContent>
       </Card>
 
+      {addReceiptOpen && data && (
+        <GroupAddReceiptModal
+          groupId={groupId}
+          groupName={data.group.name}
+          onClose={() => setAddReceiptOpen(false)}
+          onLinked={async () => {
+            await qc.invalidateQueries({ queryKey: ["group", groupId] });
+          }}
+        />
+      )}
+
       {inviteModalOpen && (
         <InviteMembersModal
           busy={busy}
@@ -1610,6 +1881,75 @@ export function GroupDetailView({
           onClose={() => {
             if (markingPaidId) return;
             setMarkPaidConfirm(null);
+          }}
+        />
+      )}
+
+      {moveToPalOpen && data && (
+        <MoveToPalMemberModal
+          groupName={data.group.name}
+          members={moveToPalMembers}
+          selectedMemberIds={selectedMoveMemberIds}
+          onToggleMember={(memberId) => {
+            setSelectedMoveMemberIds((prev) =>
+              prev.includes(memberId)
+                ? prev.filter((id) => id !== memberId)
+                : [...prev, memberId]
+            );
+          }}
+          onSelectAllEligible={() => {
+            setSelectedMoveMemberIds(
+              moveToPalEligible.map((m) => m.memberId)
+            );
+          }}
+          onClearSelection={() => setSelectedMoveMemberIds([])}
+          busy={movingToPal}
+          onConfirm={() => void moveMembersToPalDebt(selectedMoveMemberIds)}
+          onClose={() => {
+            if (movingToPal) return;
+            setMoveToPalOpen(false);
+            setSelectedMoveMemberIds([]);
+          }}
+        />
+      )}
+
+      {deleteReceiptConfirm && (
+        <ConfirmModal
+          title="Delete receipt?"
+          description="All items and splits on this receipt will be removed. This cannot be undone."
+          highlight={
+            <>
+              <p className="text-sm font-medium">
+                {deleteReceiptConfirm.merchant?.trim() || "Untitled receipt"}
+              </p>
+            </>
+          }
+          highlightClassName="border-destructive/30 bg-destructive/5"
+          confirmLabel="Delete receipt"
+          variant="destructive"
+          busy={deletingReceiptId === deleteReceiptConfirm.receiptId}
+          onConfirm={() => void deleteReceipt(deleteReceiptConfirm.receiptId)}
+          onClose={() => {
+            if (deletingReceiptId) return;
+            setDeleteReceiptConfirm(null);
+          }}
+        />
+      )}
+
+      {removeMemberConfirm && (
+        <ConfirmModal
+          title="Remove member?"
+          description="They will lose access to this group and their claims on receipts."
+          highlight={
+            <p className="text-sm font-medium">{removeMemberConfirm.name}</p>
+          }
+          confirmLabel="Remove member"
+          variant="destructive"
+          busy={busy}
+          onConfirm={() => void removeMember(removeMemberConfirm.memberId)}
+          onClose={() => {
+            if (busy) return;
+            setRemoveMemberConfirm(null);
           }}
         />
       )}
@@ -2067,6 +2407,261 @@ function InviteMembersModal({
                 </form>
               </>
             )}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function MoveToPalMemberModal({
+  groupName,
+  members,
+  selectedMemberIds,
+  onToggleMember,
+  onSelectAllEligible,
+  onClearSelection,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  groupName: string;
+  members: Array<{
+    memberId: string;
+    name: string;
+    owesTotal: number;
+    currency: string;
+    eligible: boolean;
+    ineligibleReason: string | null;
+  }>;
+  selectedMemberIds: string[];
+  onToggleMember: (memberId: string) => void;
+  onSelectAllEligible: () => void;
+  onClearSelection: () => void;
+  busy: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  const selectedSet = useMemo(
+    () => new Set(selectedMemberIds),
+    [selectedMemberIds]
+  );
+  const selectedMembers = members.filter(
+    (c) => c.eligible && selectedSet.has(c.memberId)
+  );
+  const eligibleMembers = members.filter((m) => m.eligible);
+  const eligibleCount = eligibleMembers.length;
+  const allEligibleSelected =
+    eligibleCount > 0 &&
+    eligibleMembers.every((m) => selectedSet.has(m.memberId));
+  const selectedTotal = selectedMembers.reduce((sum, m) => sum + m.owesTotal, 0);
+  const selectedCurrency = selectedMembers[0]?.currency ?? "PHP";
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, busy]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="move-to-pal-title"
+      className="fixed inset-0 z-[100] flex items-end justify-center p-0 sm:items-center sm:p-4"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+        aria-label="Close dialog"
+        disabled={busy}
+        onClick={onClose}
+      />
+      <div
+        className="relative z-[1] flex max-h-[min(88dvh,28rem)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-2xl sm:rounded-2xl"
+        style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <h2 id="move-to-pal-title" className="text-base font-semibold">
+              Move to Pal owes me
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Select members from {groupName}. They will no longer owe in this
+              group.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-10 w-10 shrink-0"
+            aria-label="Close"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
+          {eligibleCount === 0 ? (
+            <p className="px-1 py-6 text-center text-sm text-muted-foreground">
+              No members can be moved right now. They need an open balance, a
+              Paypals account, and must not already be paid or moved.
+            </p>
+          ) : (
+            <>
+              <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {selectedMembers.length > 0
+                    ? `${selectedMembers.length} selected`
+                    : "Select members"}
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={busy}
+                  onClick={
+                    allEligibleSelected ? onClearSelection : onSelectAllEligible
+                  }
+                >
+                  {allEligibleSelected ? "Clear all" : "Select all eligible"}
+                </Button>
+              </div>
+              <ul className="space-y-1.5">
+                {members.map((c) => {
+                  const selectedRow =
+                    c.eligible && selectedSet.has(c.memberId);
+                  return (
+                    <li key={c.memberId}>
+                      <button
+                        type="button"
+                        disabled={busy || !c.eligible}
+                        onClick={() => {
+                          if (c.eligible) onToggleMember(c.memberId);
+                        }}
+                        className={cn(
+                          "flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors",
+                          !c.eligible &&
+                            "cursor-not-allowed border-border/60 bg-muted/10 opacity-70",
+                          c.eligible &&
+                            selectedRow &&
+                            "border-primary bg-primary/10",
+                          c.eligible &&
+                            !selectedRow &&
+                            "border-border bg-muted/20 hover:bg-muted/40"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors",
+                            !c.eligible && "border-border/60 bg-muted/20",
+                            c.eligible &&
+                              selectedRow &&
+                              "border-primary bg-primary text-primary-foreground",
+                            c.eligible &&
+                              !selectedRow &&
+                              "border-muted-foreground/40 bg-background"
+                          )}
+                          aria-hidden
+                        >
+                          {selectedRow ? (
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          ) : null}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{c.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {c.eligible
+                              ? "Owes in this group"
+                              : c.ineligibleReason}
+                          </p>
+                        </div>
+                        {c.owesTotal > 0 ? (
+                          <span className="shrink-0 text-sm font-semibold tabular-nums">
+                            {money(c.owesTotal, c.currency)}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+
+        <div className="space-y-2 border-t border-border px-4 py-3">
+          {selectedMembers.length > 0 ? (
+            <p className="text-center text-xs text-muted-foreground">
+              {selectedMembers.length === 1 ? (
+                <>
+                  <span className="font-medium text-foreground">
+                    {selectedMembers[0].name}
+                  </span>
+                  {" · "}
+                  {money(selectedMembers[0].owesTotal, selectedMembers[0].currency)}{" "}
+                  moves to Pal owes me
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-foreground">
+                    {selectedMembers.length} members
+                  </span>
+                  {" · "}
+                  {money(selectedTotal, selectedCurrency)} total moves to Pal owes
+                  me
+                </>
+              )}
+            </p>
+          ) : null}
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="flex-1"
+              disabled={busy || selectedMembers.length === 0}
+              onClick={onConfirm}
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : selectedMembers.length <= 1 ? (
+                "Move balance"
+              ) : (
+                `Move ${selectedMembers.length} balances`
+              )}
+            </Button>
           </div>
         </div>
       </div>

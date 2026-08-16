@@ -2,6 +2,13 @@ import { createClient } from "@/lib/supabase/server";
 import { ok, unauthorized, serverError } from "@/lib/api";
 import { computeOwedToYou } from "@/lib/owed-to-you";
 import { computeConfirmedPayments } from "@/lib/confirmed-payments";
+import { computeUserGroupSpend } from "@/lib/group-member-payments";
+import { computeCollectorUnclaimed } from "@/lib/collector-unclaimed";
+import {
+  palDebtRemaining,
+  aggregatePalNetByParty,
+  sumPalPartyTotals,
+} from "@/lib/pal-debt-balance";
 import { moneyNumber } from "@/lib/money";
 
 export async function GET() {
@@ -28,10 +35,16 @@ export async function GET() {
       groupsRes,
       friendsRes,
       activitiesRes,
-      monthlyRes,
       notificationsRes,
       owedToYou,
       confirmed,
+      userSpend,
+      palDebtsOpenRes,
+      palDebtsOweRes,
+      allReceiptsSpendRes,
+      unclaimed,
+      palCreditsRes,
+      palCreditsOweRes,
     ] = await Promise.all([
       supabase
         .from("receipts")
@@ -56,28 +69,161 @@ export async function GET() {
         .order("created_at", { ascending: false })
         .limit(10),
       supabase
-        .from("receipts")
-        .select("total, created_at")
-        .eq("created_by", user.id)
-        .gte("created_at", startOfMonth),
-      supabase
         .from("notifications")
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id)
         .is("read_at", null),
       computeOwedToYou(supabase, user.id),
       computeConfirmedPayments(supabase, user.id),
+      computeUserGroupSpend(supabase, user.id, startOfMonth),
+      supabase
+        .from("pal_debts")
+        .select("id, debtor_id, amount, amount_received, currency")
+        .eq("creditor_id", user.id)
+        .eq("status", "open"),
+      supabase
+        .from("pal_debts")
+        .select("id, creditor_id, amount, amount_received, currency")
+        .eq("debtor_id", user.id)
+        .eq("status", "open"),
+      supabase.from("receipts").select("total").eq("created_by", user.id),
+      computeCollectorUnclaimed(supabase, user.id),
+      supabase
+        .from("pal_debtor_credits")
+        .select("debtor_id, credit_balance")
+        .eq("creditor_id", user.id),
+      supabase
+        .from("pal_debtor_credits")
+        .select("creditor_id, credit_balance")
+        .eq("debtor_id", user.id),
     ]);
 
-    const monthlySpend = (monthlyRes.data ?? []).reduce(
-      (sum, r) => sum + Number(r.total ?? 0),
-      0
+    const monthlySpend = userSpend.shareThisMonth;
+
+    type PalDebtCreditorRow = {
+      id: string;
+      debtor_id: string;
+      amount: number;
+      amount_received?: number | null;
+      currency: string;
+    };
+
+    type PalDebtDebtorRow = {
+      id: string;
+      creditor_id: string;
+      amount: number;
+      amount_received?: number | null;
+      currency: string;
+    };
+
+    const palDebtsRaw = palDebtsOpenRes.error
+      ? []
+      : ((palDebtsOpenRes.data ?? []) as PalDebtCreditorRow[]);
+
+    const palDebtsOweRaw = palDebtsOweRes.error
+      ? []
+      : ((palDebtsOweRes.data ?? []) as PalDebtDebtorRow[]);
+
+    const palCredits =
+      palCreditsRes.error &&
+      /pal_debtor_credits|relation|does not exist/i.test(palCreditsRes.error.message)
+        ? []
+        : (palCreditsRes.data ?? []);
+
+    const palCreditsOwe =
+      palCreditsOweRes.error &&
+      /pal_debtor_credits|relation|does not exist/i.test(palCreditsOweRes.error.message)
+        ? []
+        : (palCreditsOweRes.data ?? []);
+
+    const creditByDebtor = new Map(
+      palCredits.map((c) => [c.debtor_id as string, Number(c.credit_balance ?? 0)])
     );
 
-    const totalExpenses = (receiptsRes.data ?? []).reduce(
-      (sum, r) => sum + Number(r.total ?? 0),
-      0
+    const creditByCreditor = new Map(
+      palCreditsOwe.map((c) => [c.creditor_id as string, Number(c.credit_balance ?? 0)])
     );
+
+    const debtorIds = [...new Set(palDebtsRaw.map((d) => d.debtor_id))];
+    const creditorIds = [...new Set(palDebtsOweRaw.map((d) => d.creditor_id))];
+    const profileIds = [...new Set([...debtorIds, ...creditorIds])];
+
+    const { data: palProfiles } = profileIds.length
+      ? await supabase
+          .from("profiles")
+          .select("id, full_name, username, email")
+          .in("id", profileIds)
+      : { data: [] };
+
+    const profileById = new Map(
+      (palProfiles ?? []).map((p) => [p.id as string, p])
+    );
+
+    function profileName(id: string) {
+      const p = profileById.get(id);
+      return p?.full_name?.trim() || p?.username || p?.email || "Someone";
+    }
+
+    const palOwedTotals = aggregatePalNetByParty(
+      palDebtsRaw.map((d) => ({
+        partyId: d.debtor_id,
+        remaining: palDebtRemaining({
+          amount: Number(d.amount),
+          amount_received: d.amount_received,
+          status: "open",
+        }),
+        currency: d.currency ?? "PHP",
+      })),
+      creditByDebtor,
+      palDebtsRaw[0]?.currency ?? "PHP"
+    );
+
+    const palOweTotals = aggregatePalNetByParty(
+      palDebtsOweRaw.map((d) => ({
+        partyId: d.creditor_id,
+        remaining: palDebtRemaining({
+          amount: Number(d.amount),
+          amount_received: d.amount_received,
+          status: "open",
+        }),
+        currency: d.currency ?? "PHP",
+      })),
+      creditByCreditor,
+      palDebtsOweRaw[0]?.currency ?? "PHP"
+    );
+
+    const palOwedToYou = palOwedTotals.map((r) => ({
+      debtorId: r.partyId,
+      name: profileName(r.partyId),
+      amount: r.amount,
+      currency: r.currency,
+      debtCount: r.debtCount,
+    }));
+
+    const palOweToOthers = palOweTotals.map((r) => ({
+      creditorId: r.partyId,
+      name: profileName(r.partyId),
+      amount: r.amount,
+      currency: r.currency,
+      debtCount: r.debtCount,
+    }));
+
+    const palDebtsOpenTotal = sumPalPartyTotals(palOwedTotals);
+    const palDebtsOweTotal = sumPalPartyTotals(palOweTotals);
+    const overallSpent = moneyNumber(
+      (allReceiptsSpendRes.data ?? []).reduce(
+        (sum, r) => sum + Number(r.total ?? 0),
+        0
+      )
+    );
+    const balanceToCollect = moneyNumber(
+      owedToYou.totalOwed + palDebtsOpenTotal + unclaimed.totalValue
+    );
+    // Unpaid group members + open pal debts + unclaimed line items (excludes marked-paid)
+    const collectPendingCount =
+      owedToYou.rows.length +
+      palOwedToYou.length +
+      unclaimed.itemCount;
 
     const months: { label: string; total: number; payments: number }[] = [];
     for (let i = 5; i >= 0; i--) {
@@ -137,13 +283,22 @@ export async function GET() {
 
     return ok({
       stats: {
-        totalExpenses,
+        userSpent: userSpend.totalShare,
+        userSpentThisMonth: userSpend.shareThisMonth,
+        overallSpent,
+        userOwes: userSpend.totalOwes,
         monthlySpend,
         groupsCount: groups.length,
         friendsCount: friendsRes.count ?? 0,
         unreadNotifications: notificationsRes.count ?? 0,
         mostActiveGroup: groups[0]?.name ?? null,
         totalOwedToYou: owedToYou.totalOwed,
+        palDebtsOpenTotal,
+        palDebtsOweTotal,
+        balanceToCollect,
+        unclaimedItemCount: unclaimed.itemCount,
+        unclaimedItemValue: unclaimed.totalValue,
+        collectPendingCount,
         totalPaymentsReceived: confirmed.totalReceived,
         totalPaymentsSent: confirmed.totalSent,
         paymentsReceivedThisMonth: receivedThisMonth,
@@ -153,6 +308,9 @@ export async function GET() {
       activities: activitiesRes.data ?? [],
       monthlyChart: months,
       owedToYou: owedToYou.rows,
+      palOwedToYou,
+      palOweToOthers,
+      unclaimedReceipts: unclaimed.receipts,
       confirmedPayments: confirmed.rows,
     });
   } catch (error) {

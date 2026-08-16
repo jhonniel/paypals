@@ -26,7 +26,15 @@ export async function GET(request: Request) {
     const { data, error } = await query;
     if (error) throw error;
 
-    return ok(data ?? []);
+    const { count: unreadCount, error: countError } = await supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .is("read_at", null);
+
+    if (countError) throw countError;
+
+    return ok(data ?? [], undefined, { unread_count: unreadCount ?? 0 });
   } catch (error) {
     console.error(error);
     return serverError();
@@ -36,6 +44,7 @@ export async function GET(request: Request) {
 const patchSchema = z.object({
   ids: z.array(z.string().uuid()).optional(),
   all: z.boolean().optional(),
+  link: z.string().min(1).optional(),
 });
 
 /** Mark notifications as read */
@@ -58,8 +67,12 @@ export async function PATCH(request: Request) {
 
     if (parsed.data.ids?.length) {
       query = query.in("id", parsed.data.ids);
-    } else if (!parsed.data.all) {
-      return fail("Provide ids or all: true");
+    } else if (parsed.data.link) {
+      query = query.eq("link", parsed.data.link);
+    } else if (parsed.data.all) {
+      /* mark all unread */
+    } else {
+      return fail("Provide ids, link, or all: true");
     }
 
     const { error } = await query;

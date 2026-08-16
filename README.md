@@ -80,6 +80,28 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+### Keep Supabase awake (free tier)
+
+Free Supabase projects pause after ~7 days of inactivity. Paypals includes a keep-awake cron:
+
+**On Vercel (recommended)** — `vercel.json` runs `GET /api/cron/keep-awake` every 4 days. Set `CRON_SECRET` in Vercel env vars (same value Vercel sends as `Authorization: Bearer …`).
+
+**GitHub Actions** — workflow [`.github/workflows/keep-supabase-awake.yml`](.github/workflows/keep-supabase-awake.yml) runs every 5 days. Add repo secrets: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, optional `KEEP_AWAKE_URL`.
+
+**Local / manual**
+
+```bash
+npm run keep-awake
+# or
+npm run cron:keep-awake
+```
+
+**Local crontab** (every 5 days at 8:00):
+
+```cron
+0 8 1-31/5 * * cd /path/to/Paypals && npm run keep-awake >> /tmp/paypals-keep-awake.log 2>&1
+```
+
 ## Deploy on Vercel
 
 See the full checklist in [PRODUCTION.md](PRODUCTION.md).

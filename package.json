@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "keep-awake": "node scripts/keep-supabase-awake.mjs"
+    "keep-awake": "node scripts/keep-supabase-awake.mjs",
+    "cron:keep-awake": "node scripts/keep-supabase-awake.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
@@ -40,6 +41,7 @@
     "date-fns": "^4.4.0",
     "decimal.js": "^10.6.0",
     "framer-motion": "^12.42.2",
+    "heic-convert": "^2.1.0",
     "heic2any": "^0.0.4",
     "lucide-react": "^1.25.0",
     "next": "15.5.20",

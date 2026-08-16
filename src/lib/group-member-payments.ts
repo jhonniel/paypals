@@ -6,6 +6,7 @@ import {
 } from "@/lib/receipt-sub-items";
 import {
   computeSplitBalances,
+  memberAdjustmentLines,
   type AssignmentInput,
   type ItemSplitInput,
   type ItemSplitMode,
@@ -41,11 +42,12 @@ export type MemberPaymentSummary = {
 
 export function parsePaymentProofSource(
   raw: unknown
-): { manual: boolean; bill_payer: boolean } {
+): { manual: boolean; bill_payer: boolean; moved_to_pal: boolean } {
   const source = (raw as { source?: string } | null)?.source;
   return {
     manual: source === "manual",
     bill_payer: source === "bill_payer",
+    moved_to_pal: source === "moved_to_pal",
   };
 }
 
@@ -56,6 +58,7 @@ export function isMemberMarkedPaid(
     expected_amount: number;
     manual?: boolean;
     bill_payer?: boolean;
+    moved_to_pal?: boolean;
   } | null
 ): boolean {
   if (!proof || proof.status !== "paid") return false;
@@ -63,6 +66,7 @@ export function isMemberMarkedPaid(
   if (owesTotal <= 0) return false;
   return (
     Boolean(proof.manual) ||
+    Boolean(proof.moved_to_pal) ||
     Math.abs(proof.expected_amount - owesTotal) <= 1
   );
 }
@@ -106,61 +110,73 @@ type AssignmentRow = {
 
 async function loadGroupReceiptsWithAssignments(
   supabase: SupabaseClient,
-  groupId: string
+  groupId: string,
+  options?: { since?: string }
 ) {
-  let receiptsQuery = await supabase
-    .from("receipts")
-    .select(
-      `id, merchant, currency, receipt_date, tax, discount, service_charge, tip, paid_by_member_id,
+  const withSince = <T extends { gte: (col: string, val: string) => T }>(query: T) =>
+    options?.since ? query.gte("created_at", options.since) : query;
+
+  let receiptsQuery = await withSince(
+    supabase
+      .from("receipts")
+      .select(
+        `id, merchant, currency, receipt_date, created_at, tax, discount, service_charge, tip, paid_by_member_id,
        receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n, sub_items)`
-    )
-    .eq("group_id", groupId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+      )
+      .eq("group_id", groupId)
+      .order("created_at", { ascending: false })
+      .limit(50)
+  );
 
   if (
     receiptsQuery.error &&
     /paid_by_member_id|column/i.test(receiptsQuery.error.message)
   ) {
-    receiptsQuery = (await supabase
-      .from("receipts")
-      .select(
-        `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+    receiptsQuery = (await withSince(
+      supabase
+        .from("receipts")
+        .select(
+          `id, merchant, currency, receipt_date, created_at, tax, discount, service_charge, tip,
          receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n, sub_items)`
-      )
-      .eq("group_id", groupId)
-      .order("created_at", { ascending: false })
-      .limit(50)) as typeof receiptsQuery;
+        )
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: false })
+        .limit(50)
+    )) as typeof receiptsQuery;
   }
 
   if (
     receiptsQuery.error &&
     /sub_items|column/i.test(receiptsQuery.error.message)
   ) {
-    receiptsQuery = (await supabase
-      .from("receipts")
-      .select(
-        `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+    receiptsQuery = (await withSince(
+      supabase
+        .from("receipts")
+        .select(
+          `id, merchant, currency, receipt_date, created_at, tax, discount, service_charge, tip,
          receipt_items(id, name, quantity, total_price, sort_order, split_mode, split_n)`
-      )
-      .eq("group_id", groupId)
-      .order("created_at", { ascending: false })
-      .limit(50)) as typeof receiptsQuery;
+        )
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: false })
+        .limit(50)
+    )) as typeof receiptsQuery;
   }
 
   if (
     receiptsQuery.error &&
     /split_mode|split_n|column/i.test(receiptsQuery.error.message)
   ) {
-    receiptsQuery = (await supabase
-      .from("receipts")
-      .select(
-        `id, merchant, currency, receipt_date, tax, discount, service_charge, tip,
+    receiptsQuery = (await withSince(
+      supabase
+        .from("receipts")
+        .select(
+          `id, merchant, currency, receipt_date, created_at, tax, discount, service_charge, tip,
          receipt_items(id, name, quantity, total_price, sort_order)`
-      )
-      .eq("group_id", groupId)
-      .order("created_at", { ascending: false })
-      .limit(50)) as typeof receiptsQuery;
+        )
+        .eq("group_id", groupId)
+        .order("created_at", { ascending: false })
+        .limit(50)
+    )) as typeof receiptsQuery;
   }
 
   const receipts = receiptsQuery.data ?? [];
@@ -197,7 +213,8 @@ async function loadGroupReceiptsWithAssignments(
 export async function getGroupMemberPayments(
   supabase: SupabaseClient,
   groupId: string,
-  memberIds: string[]
+  memberIds: string[],
+  options?: { since?: string }
 ): Promise<MemberPaymentSummary[]> {
   const acc = new Map<
     string,
@@ -216,7 +233,8 @@ export async function getGroupMemberPayments(
 
   const { receipts, assignmentsByItem } = await loadGroupReceiptsWithAssignments(
     supabase,
-    groupId
+    groupId,
+    options
   );
   const defaultPayerMemberId = await getGroupDefaultPayerMemberId(
     supabase,
@@ -311,6 +329,21 @@ export async function getGroupMemberPayments(
         });
       }
 
+      for (const adj of memberAdjustmentLines(
+        share.memberId,
+        share.itemsSubtotal,
+        summary.assignedTotal,
+        {
+          tax: Number(r.tax),
+          discount: Number(r.discount),
+          serviceCharge: Number(r.service_charge),
+          tip: Number(r.tip),
+        },
+        memberIds
+      )) {
+        receiptItems.push({ name: adj.name, quantity: 1, amount: adj.amount });
+      }
+
       row.receipts.push({
         receipt_id: r.id,
         merchant: (r.merchant as string | null) ?? null,
@@ -353,4 +386,71 @@ export async function getMemberGroupPayTotal(
   if (!mine) return null;
 
   return { total: mine.owes, currency: mine.currency };
+}
+
+/** Sum the user's consumption share across every group they belong to. */
+export async function computeUserGroupSpend(
+  supabase: SupabaseClient,
+  userId: string,
+  monthStart?: string
+): Promise<{
+  totalShare: number;
+  shareThisMonth: number;
+  totalOwes: number;
+  currency: string;
+}> {
+  const { data: memberships } = await supabase
+    .from("group_members")
+    .select("id, group_id")
+    .eq("user_id", userId);
+
+  if (!memberships?.length) {
+    return { totalShare: 0, shareThisMonth: 0, totalOwes: 0, currency: "PHP" };
+  }
+
+  const myMemberByGroup = new Map(
+    memberships.map((m) => [m.group_id as string, m.id as string])
+  );
+  const groupIds = [...myMemberByGroup.keys()];
+
+  let totalShare = 0;
+  let shareThisMonth = 0;
+  let totalOwes = 0;
+  let currency = "PHP";
+
+  for (const groupId of groupIds) {
+    const myMemberId = myMemberByGroup.get(groupId);
+    if (!myMemberId) continue;
+
+    const { data: groupMembers } = await supabase
+      .from("group_members")
+      .select("id")
+      .eq("group_id", groupId);
+    const memberIds = (groupMembers ?? []).map((m) => m.id);
+    if (!memberIds.length) continue;
+
+    const allPayments = await getGroupMemberPayments(supabase, groupId, memberIds);
+    const mine = allPayments.find((p) => p.member_id === myMemberId);
+    if (mine) {
+      totalShare = moneyNumber(totalShare + mine.total);
+      totalOwes = moneyNumber(totalOwes + mine.owes);
+      currency = mine.currency;
+    }
+
+    if (monthStart) {
+      const monthPayments = await getGroupMemberPayments(
+        supabase,
+        groupId,
+        memberIds,
+        { since: monthStart }
+      );
+      const mineMonth = monthPayments.find((p) => p.member_id === myMemberId);
+      if (mineMonth) {
+        shareThisMonth = moneyNumber(shareThisMonth + mineMonth.total);
+        if (mineMonth.currency) currency = mineMonth.currency;
+      }
+    }
+  }
+
+  return { totalShare, shareThisMonth, totalOwes, currency };
 }

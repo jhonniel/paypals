@@ -15,16 +15,21 @@ export async function GET(request: Request) {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
     const q = searchParams.get("q")?.trim();
+    const excludeGroup = searchParams.get("excludeGroup")?.trim();
 
     let query = supabase
       .from("receipts")
       .select(
-        "id, merchant, total, currency, status, receipt_date, ocr_confidence, created_at, updated_at",
+        "id, merchant, total, currency, status, receipt_date, ocr_confidence, created_at, updated_at, group_id",
         { count: "exact" }
       )
       .eq("created_by", user.id)
       .order("created_at", { ascending: false })
       .range(from, to);
+
+    if (excludeGroup) {
+      query = query.or(`group_id.is.null,group_id.neq.${excludeGroup}`);
+    }
 
     if (q) {
       query = query.ilike("merchant", `%${q}%`);
@@ -172,7 +177,7 @@ export async function POST(request: Request) {
       receipt_id: receiptId,
       user_id: user.id,
       event: "created_manual",
-      payload: { item_count: items.length, group_id: groupId },
+      metadata: { item_count: items.length, group_id: groupId },
     });
 
     await supabase.from("activities").insert({

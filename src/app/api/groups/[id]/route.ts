@@ -16,6 +16,7 @@ import {
 } from "@/lib/payment-methods";
 import {
   computeSplitBalances,
+  memberAdjustmentLines,
   type AssignmentInput,
   type ItemSplitInput,
   type ItemSplitMode,
@@ -422,6 +423,25 @@ export async function GET(req: Request, { params }: Params) {
               : {}),
           });
         }
+        for (const adj of memberAdjustmentLines(
+          share.memberId,
+          share.itemsSubtotal,
+          summary.assignedTotal,
+          {
+            tax: Number(r.tax),
+            discount: Number(r.discount),
+            serviceCharge: Number(r.service_charge),
+            tip: Number(r.tip),
+          },
+          memberIds
+        )) {
+          acc.items.push({
+            name: adj.name,
+            quantity: 1,
+            amount: moneyNumber(adj.amount),
+            merchant: r.merchant,
+          });
+        }
       }
     }
 
@@ -667,6 +687,7 @@ export async function GET(req: Request, { params }: Params) {
       rejection_reason: string | null;
       manual: boolean;
       bill_payer: boolean;
+      moved_to_pal: boolean;
     }> = [];
     {
       const proofsQuery = await supabase
@@ -688,6 +709,7 @@ export async function GET(req: Request, { params }: Params) {
             rejection_reason: p.rejection_reason,
             manual: raw?.source === "manual",
             bill_payer: raw?.source === "bill_payer",
+            moved_to_pal: raw?.source === "moved_to_pal",
           };
         });
         // Managers always see all proofs so they can mark paid; others follow visibility

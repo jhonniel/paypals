@@ -53,9 +53,40 @@ export async function POST(request: Request) {
 
     const { data: member } = await auth.supabase
       .from("group_members")
-      .select("group_id")
+      .select("group_id, invited_by")
       .eq("id", memberId)
       .maybeSingle();
+
+    if (member?.group_id) {
+      const { data: group } = await auth.supabase
+        .from("groups")
+        .select("name")
+        .eq("id", member.group_id)
+        .maybeSingle();
+
+      let body = `You were added to ${group?.name ?? "a group"}.`;
+      if (member.invited_by) {
+        const { data: inviter } = await auth.supabase
+          .from("profiles")
+          .select("full_name, username")
+          .eq("id", member.invited_by)
+          .maybeSingle();
+        const inviterName =
+          inviter?.full_name?.trim() ||
+          (inviter?.username ? `@${inviter.username}` : null);
+        if (inviterName) {
+          body = `${inviterName} added you to ${group?.name ?? "a group"}.`;
+        }
+      }
+
+      await auth.supabase.from("notifications").insert({
+        user_id: auth.user.id,
+        type: "invitation",
+        title: `Added to ${group?.name ?? "a group"}`,
+        body,
+        link: `/groups/${member.group_id}`,
+      });
+    }
 
     await auth.supabase
       .from("profiles")

@@ -44,7 +44,7 @@ export async function extractWithPreprocess(
   const errors: string[] = [];
   const baseName = fileName ?? "receipt.jpg";
 
-  const original = await compressForOcr(buffer, mimeType);
+  const original = await compressForOcr(buffer, mimeType, baseName);
   let originalResult: OcrResult | null = null;
   try {
     originalResult = await runOcrPass(
@@ -57,7 +57,7 @@ export async function extractWithPreprocess(
     errors.push(err instanceof Error ? err.message : "Original OCR failed");
   }
 
-  const pre = await preprocessReceiptImage(buffer, mimeType);
+  const pre = await preprocessReceiptImage(buffer, mimeType, baseName);
   let enhancedResult: OcrResult | null = null;
   try {
     enhancedResult = await runOcrPass(

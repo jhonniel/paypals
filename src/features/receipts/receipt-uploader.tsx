@@ -26,33 +26,14 @@ import {
   isPayloadTooLargeError,
   prepareReceiptUpload,
 } from "@/lib/compress-receipt-image";
+import {
+  prepareImageFileForUpload,
+  previewUrlForImageFile,
+  isHeicFile,
+} from "@/lib/convert-heic-client";
 
 const ACCEPT =
   "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
-
-async function maybeConvertHeic(file: File): Promise<File> {
-  const isHeic =
-    /heic|heif/i.test(file.type) || /\.heic$|\.heif$/i.test(file.name);
-  if (!isHeic) return file;
-
-  try {
-    const heic2any = (await import("heic2any")).default;
-    const converted = await heic2any({
-      blob: file,
-      toType: "image/jpeg",
-      quality: 0.9,
-    });
-    const blob = Array.isArray(converted) ? converted[0] : converted;
-    return new File(
-      [blob],
-      file.name.replace(/\.(heic|heif)$/i, ".jpg"),
-      { type: "image/jpeg" }
-    );
-  } catch {
-    toast.message("HEIC conversion failed — uploading original");
-    return file;
-  }
-}
 
 type SessionReceipt = {
   id: string;
@@ -188,10 +169,9 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         return;
       }
       setFileName(file.name);
-      let localPreview: string | null = null;
-      if (file.type.startsWith("image/") || /\.(heic|heif)$/i.test(file.name)) {
-        revokePreviewUrl(previewUrlRef.current);
-        localPreview = URL.createObjectURL(file);
+      revokePreviewUrl(previewUrlRef.current);
+      const localPreview = await previewUrlForImageFile(file);
+      if (localPreview) {
         previewUrlRef.current = localPreview;
         setPreview(localPreview);
       } else {
@@ -201,8 +181,18 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
       setUploading(true);
       setScanning(true);
       try {
-        const ready = await maybeConvertHeic(file);
-        const compressed = await prepareReceiptUpload(ready);
+        const ready = await prepareImageFileForUpload(file);
+        let compressed: File;
+        try {
+          compressed = await prepareReceiptUpload(ready);
+        } catch (compressErr) {
+          if (isHeicFile(ready)) {
+            // Skip browser compression when HEIC can't be decoded locally.
+            compressed = ready;
+          } else {
+            throw compressErr;
+          }
+        }
         const form = new FormData();
         form.append("file", compressed);
         if (effectiveGroupId) form.append("group_id", effectiveGroupId);

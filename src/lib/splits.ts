@@ -69,6 +69,46 @@ function allocateEqual(total: number, memberIds: string[]): Map<string, number> 
   return map;
 }
 
+export type AdjustmentLine = {
+  name: string;
+  amount: number;
+};
+
+/** Per-member share of tax, tip, discount, and service charge for display in item lists. */
+export function memberAdjustmentLines(
+  memberId: string,
+  itemsSubtotal: number,
+  itemsAssignedTotal: number,
+  adjustments: Adjustments,
+  equalServiceChargeMemberIds: string[] = []
+): AdjustmentLine[] {
+  const lines: AdjustmentLine[] = [];
+  const ratio =
+    itemsAssignedTotal > 0 ? d(itemsSubtotal).div(itemsAssignedTotal) : d(0);
+
+  const tax = moneyNumber(d(adjustments.tax).mul(ratio));
+  const tip = moneyNumber(d(adjustments.tip).mul(ratio));
+  const discount = moneyNumber(d(adjustments.discount).mul(ratio));
+
+  if (tax > 0) lines.push({ name: "Tax", amount: tax });
+  if (tip > 0) lines.push({ name: "Tip", amount: tip });
+  if (discount > 0) lines.push({ name: "Discount", amount: -discount });
+
+  const serviceCharge = Number(adjustments.serviceCharge);
+  if (serviceCharge > 0) {
+    const serviceIds = equalServiceChargeMemberIds.filter(Boolean);
+    if (serviceIds.length > 0 && serviceIds.includes(memberId)) {
+      const share = allocateEqual(serviceCharge, serviceIds).get(memberId) ?? 0;
+      if (share > 0) lines.push({ name: "Service charge", amount: share });
+    } else if (serviceIds.length === 0 && itemsAssignedTotal > 0) {
+      const share = moneyNumber(d(serviceCharge).mul(ratio));
+      if (share > 0) lines.push({ name: "Service charge", amount: share });
+    }
+  }
+
+  return lines;
+}
+
 function allocatePercentage(
   total: number,
   assignments: AssignmentInput[]

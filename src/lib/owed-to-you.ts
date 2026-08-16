@@ -3,7 +3,13 @@ import {
   computeSplitBalances,
   type AssignmentInput,
   type ItemSplitInput,
+  type ItemSplitMode,
 } from "@/lib/splits";
+import {
+  isMemberMarkedPaid,
+  parsePaymentProofSource,
+  resolveReceiptPayerMemberId,
+} from "@/lib/group-member-payments";
 import { moneyNumber } from "@/lib/money";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -17,8 +23,99 @@ export type OwedToYouRow = {
   receiptIds: string[];
 };
 
+type ReceiptRow = {
+  id: string;
+  currency: string | null;
+  tax: number | null;
+  discount: number | null;
+  service_charge: number | null;
+  tip: number | null;
+  paid_by_member_id: string | null;
+  group_id: string | null;
+};
+
+type ItemRow = {
+  id: string;
+  receipt_id: string;
+  name: string;
+  quantity: number;
+  total_price: number;
+  split_mode?: string | null;
+  split_n?: number | null;
+};
+
+async function loadGroupReceiptsForOwed(
+  supabase: SupabaseClient,
+  groupIds: string[]
+): Promise<ReceiptRow[]> {
+  if (!groupIds.length) return [];
+
+  let res = await supabase
+    .from("receipts")
+    .select(
+      "id, currency, tax, discount, service_charge, tip, paid_by_member_id, group_id"
+    )
+    .in("group_id", groupIds)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (res.error && /paid_by_member_id|column/i.test(res.error.message)) {
+    const fallback = await supabase
+      .from("receipts")
+      .select("id, currency, tax, discount, service_charge, tip, group_id")
+      .in("group_id", groupIds)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (fallback.error) return [];
+    return (fallback.data ?? []).map((row) => ({
+      ...row,
+      paid_by_member_id: null,
+    })) as ReceiptRow[];
+  }
+
+  if (res.error) return [];
+  return (res.data ?? []) as ReceiptRow[];
+}
+
+async function loadReceiptItemsForOwed(
+  supabase: SupabaseClient,
+  receiptIds: string[]
+): Promise<ItemRow[]> {
+  if (!receiptIds.length) return [];
+
+  let res = await supabase
+    .from("receipt_items")
+    .select("id, receipt_id, name, quantity, total_price, split_mode, split_n")
+    .in("receipt_id", receiptIds);
+
+  if (res.error && /split_mode|split_n|column/i.test(res.error.message)) {
+    const fallback = await supabase
+      .from("receipt_items")
+      .select("id, receipt_id, name, quantity, total_price")
+      .in("receipt_id", receiptIds);
+    if (fallback.error) return [];
+    return (fallback.data ?? []) as ItemRow[];
+  }
+
+  if (res.error) return [];
+  return (res.data ?? []) as ItemRow[];
+}
+
+function defaultPayerMemberIdForGroup(
+  groupId: string,
+  members: Array<{ id: string; group_id: string; user_id: string | null; role: string }>,
+  createdBy: string | null | undefined
+): string | null {
+  const groupMembers = members.filter((m) => m.group_id === groupId);
+  const owner =
+    groupMembers.find((m) => m.role === "owner") ??
+    groupMembers.find((m) => m.user_id === createdBy);
+  return owner?.id ?? null;
+}
+
 /**
  * Aggregate who still owes the current user on bills they paid.
+ * Uses the same bill-payer rules as the group page (explicit payer or group owner).
  */
 export async function computeOwedToYou(
   supabase: SupabaseClient,
@@ -30,42 +127,63 @@ export async function computeOwedToYou(
     .eq("user_id", userId);
 
   const myMemberIds = (myMemberships ?? []).map((m) => m.id);
-  if (myMemberIds.length === 0) {
+  const groupIds = [...new Set((myMemberships ?? []).map((m) => m.group_id as string))];
+  if (myMemberIds.length === 0 || groupIds.length === 0) {
     return { rows: [], totalOwed: 0 };
   }
 
-  const { data: receipts } = await supabase
-    .from("receipts")
-    .select(
-      "id, currency, tax, discount, service_charge, tip, paid_by_member_id, group_id"
-    )
-    .in("paid_by_member_id", myMemberIds)
-    .not("group_id", "is", null)
-    .limit(80);
-
-  if (!receipts?.length) {
-    return { rows: [], totalOwed: 0 };
-  }
-
-  const receiptIds = receipts.map((r) => r.id);
-  const groupIds = [
-    ...new Set(receipts.map((r) => r.group_id).filter(Boolean) as string[]),
-  ];
-
-  const [{ data: items }, { data: members }] = await Promise.all([
-    supabase
-      .from("receipt_items")
-      .select("id, receipt_id, name, quantity, total_price")
-      .in("receipt_id", receiptIds),
+  const [receipts, { data: groups }, { data: members }] = await Promise.all([
+    loadGroupReceiptsForOwed(supabase, groupIds),
+    supabase.from("groups").select("id, created_by").in("id", groupIds),
     supabase
       .from("group_members")
       .select(
-        "id, group_id, user_id, guest_name, profiles:user_id(full_name, username, email)"
+        "id, group_id, user_id, role, guest_name, profiles:user_id(full_name, username, email)"
       )
       .in("group_id", groupIds),
   ]);
 
-  const itemIds = (items ?? []).map((i) => i.id);
+  if (!receipts.length) {
+    return { rows: [], totalOwed: 0 };
+  }
+
+  const createdByByGroup = new Map(
+    (groups ?? []).map((g) => [g.id as string, g.created_by as string])
+  );
+  const defaultPayerByGroup = new Map<string, string | null>();
+  for (const groupId of groupIds) {
+    defaultPayerByGroup.set(
+      groupId,
+      defaultPayerMemberIdForGroup(
+        groupId,
+        (members ?? []) as Array<{
+          id: string;
+          group_id: string;
+          user_id: string | null;
+          role: string;
+        }>,
+        createdByByGroup.get(groupId)
+      )
+    );
+  }
+
+  const myReceipts = receipts.filter((receipt) => {
+    if (!receipt.group_id) return false;
+    const paidBy = resolveReceiptPayerMemberId(
+      receipt.paid_by_member_id,
+      defaultPayerByGroup.get(receipt.group_id)
+    );
+    return paidBy != null && myMemberIds.includes(paidBy);
+  });
+
+  if (!myReceipts.length) {
+    return { rows: [], totalOwed: 0 };
+  }
+
+  const receiptIds = myReceipts.map((r) => r.id);
+  const items = await loadReceiptItemsForOwed(supabase, receiptIds);
+
+  const itemIds = items.map((i) => i.id);
   const { data: assignments } = itemIds.length
     ? await supabase
         .from("receipt_item_assignments")
@@ -93,14 +211,15 @@ export async function computeOwedToYou(
     list.push(m.id);
     memberIdsByGroup.set(m.group_id, list);
   }
-  const itemsByReceipt = new Map<string, typeof items>();
-  for (const item of items ?? []) {
+  const itemsByReceipt = new Map<string, ItemRow[]>();
+  for (const item of items) {
     const list = itemsByReceipt.get(item.receipt_id) ?? [];
     list.push(item);
     itemsByReceipt.set(item.receipt_id, list);
   }
 
-  type Acc = {
+  type GroupMemberAcc = {
+    groupId: string;
     memberId: string;
     userId: string | null;
     name: string;
@@ -108,10 +227,14 @@ export async function computeOwedToYou(
     currency: string;
     receiptIds: Set<string>;
   };
-  const owed = new Map<string, Acc>();
+  const byGroupMember = new Map<string, GroupMemberAcc>();
 
-  for (const receipt of receipts) {
-    const paidBy = receipt.paid_by_member_id;
+  for (const receipt of myReceipts) {
+    const groupId = receipt.group_id!;
+    const paidBy = resolveReceiptPayerMemberId(
+      receipt.paid_by_member_id,
+      defaultPayerByGroup.get(groupId)
+    );
     if (!paidBy || !myMemberIds.includes(paidBy)) continue;
 
     const rItems = itemsByReceipt.get(receipt.id) ?? [];
@@ -130,6 +253,8 @@ export async function computeOwedToYou(
         itemName: item.name,
         itemTotal: Number(item.total_price),
         itemQuantity: Number(item.quantity),
+        splitMode: (item.split_mode as ItemSplitMode) ?? "among_n",
+        splitN: item.split_n ?? null,
         assignments: assignmentInputs,
       };
     });
@@ -143,9 +268,8 @@ export async function computeOwedToYou(
         tip: Number(receipt.tip),
       },
       {
-        equalServiceChargeMemberIds: receipt.group_id
-          ? memberIdsByGroup.get(receipt.group_id) ?? []
-          : [],
+        equalServiceChargeMemberIds: memberIdsByGroup.get(groupId) ?? [],
+        groupMemberIds: memberIdsByGroup.get(groupId) ?? [],
       }
     );
 
@@ -155,16 +279,16 @@ export async function computeOwedToYou(
     for (const o of owes) {
       if (o.amount <= 0) continue;
       const from = memberById.get(o.fromMemberId);
-      // Skip if the debtor is also me (shouldn't happen)
       if (from?.user_id === userId) continue;
 
-      const key = from?.user_id ?? o.fromMemberId;
-      const existing = owed.get(key);
+      const gmKey = `${groupId}:${o.fromMemberId}`;
+      const existing = byGroupMember.get(gmKey);
       if (existing) {
         existing.amount = moneyNumber(existing.amount + o.amount);
         existing.receiptIds.add(receipt.id);
       } else {
-        owed.set(key, {
+        byGroupMember.set(gmKey, {
+          groupId,
           memberId: o.fromMemberId,
           userId: from?.user_id ?? null,
           name: from ? memberLabel(from) : "Member",
@@ -173,6 +297,72 @@ export async function computeOwedToYou(
           receiptIds: new Set([receipt.id]),
         });
       }
+    }
+  }
+
+  const { data: paidProofs } = await supabase
+    .from("group_payment_proofs")
+    .select(
+      "group_id, from_member_id, status, expected_amount, ocr_amount, ocr_raw"
+    )
+    .eq("status", "paid")
+    .in("to_member_id", myMemberIds);
+
+  const proofsByGroupMember = new Map<
+    string,
+    {
+      status: string;
+      expected_amount: number;
+      ocr_amount: number | null;
+      manual: boolean;
+      bill_payer: boolean;
+    }
+  >();
+  for (const p of paidProofs ?? []) {
+    const proofMeta = parsePaymentProofSource(p.ocr_raw);
+    proofsByGroupMember.set(`${p.group_id}:${p.from_member_id}`, {
+      status: p.status,
+      expected_amount: Number(p.expected_amount),
+      ocr_amount: p.ocr_amount != null ? Number(p.ocr_amount) : null,
+      ...proofMeta,
+    });
+  }
+
+  type Acc = {
+    memberId: string;
+    userId: string | null;
+    name: string;
+    amount: number;
+    currency: string;
+    receiptIds: Set<string>;
+  };
+  const owed = new Map<string, Acc>();
+
+  for (const entry of byGroupMember.values()) {
+    const proof = proofsByGroupMember.get(`${entry.groupId}:${entry.memberId}`);
+    if (isMemberMarkedPaid(entry.amount, proof)) continue;
+
+    let amount = entry.amount;
+    if (proof?.status === "paid") {
+      const paidAmt = moneyNumber(proof.ocr_amount ?? proof.expected_amount);
+      amount = moneyNumber(Math.max(0, amount - paidAmt));
+    }
+    if (amount <= 0) continue;
+
+    const key = entry.userId ?? entry.memberId;
+    const existing = owed.get(key);
+    if (existing) {
+      existing.amount = moneyNumber(existing.amount + amount);
+      for (const rid of entry.receiptIds) existing.receiptIds.add(rid);
+    } else {
+      owed.set(key, {
+        memberId: entry.memberId,
+        userId: entry.userId,
+        name: entry.name,
+        amount,
+        currency: entry.currency,
+        receiptIds: new Set(entry.receiptIds),
+      });
     }
   }
 
@@ -188,33 +378,6 @@ export async function computeOwedToYou(
     }))
     .sort((a, b) => b.amount - a.amount);
 
-  // Subtract group-level confirmed payments (status = paid)
-  const { data: paidProofs } = await supabase
-    .from("group_payment_proofs")
-    .select("from_member_id, ocr_amount, expected_amount")
-    .eq("status", "paid")
-    .in(
-      "to_member_id",
-      myMemberIds
-    );
-
-  if (paidProofs?.length) {
-    const paidByMember = new Map<string, number>();
-    for (const p of paidProofs) {
-      const amt = moneyNumber(p.ocr_amount ?? p.expected_amount);
-      paidByMember.set(
-        p.from_member_id,
-        moneyNumber((paidByMember.get(p.from_member_id) ?? 0) + amt)
-      );
-    }
-    for (const row of rows) {
-      const paid = paidByMember.get(row.memberId) ?? 0;
-      if (paid <= 0) continue;
-      row.amount = moneyNumber(Math.max(0, row.amount - paid));
-    }
-  }
-
-  const remaining = rows.filter((r) => r.amount > 0);
-  const totalOwed = moneyNumber(remaining.reduce((s, r) => s + r.amount, 0));
-  return { rows: remaining, totalOwed };
+  const totalOwed = moneyNumber(rows.reduce((s, r) => s + r.amount, 0));
+  return { rows, totalOwed };
 }

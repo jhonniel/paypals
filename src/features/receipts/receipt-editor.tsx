@@ -27,6 +27,7 @@ import { sumDiscountAmount } from "@/lib/receipt-discounts";
 import { itemSplitPerPersonAmount } from "@/lib/splits";
 import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
+import { ConfirmModal } from "@/components/confirm-modal";
 import { ReceiptScanOverlay } from "@/components/receipt-scan-overlay";
 import {
   normalizeSubItems,
@@ -142,6 +143,8 @@ function uid() {
   return crypto.randomUUID();
 }
 
+const DEFAULT_ITEM_LABELS = ["New item", "Item"] as const;
+
 function buildEditorSnapshot(input: {
   merchant: string;
   date: string;
@@ -197,8 +200,11 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   const [showEnhanced, setShowEnhanced] = useState(false);
   const [items, setItems] = useState<EditorItem[]>([]);
   const [canEdit, setCanEdit] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [groupId, setGroupId] = useState<string | null>(null);
   const [groupSize, setGroupSize] = useState(0);
+  const [linkedGroupLabel, setLinkedGroupLabel] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState("");
 
   async function load() {
@@ -259,20 +265,6 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           items: nextItems,
         })
       );
-
-      if (data.receipt.group_id) {
-        try {
-          const gRes = await fetch(`/api/groups/${data.receipt.group_id}`);
-          const gJson = await gRes.json();
-          if (gRes.ok) {
-            setGroupSize(Array.isArray(gJson?.data?.members) ? gJson.data.members.length : 0);
-          }
-        } catch {
-          setGroupSize(0);
-        }
-      } else {
-        setGroupSize(0);
-      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -288,13 +280,20 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   useEffect(() => {
     if (!groupId) {
       setGroupSize(0);
+      setLinkedGroupLabel(null);
       return;
     }
+
     let cancelled = false;
     void fetch(`/api/groups/${groupId}`)
       .then((res) => res.json())
       .then((json) => {
         if (cancelled) return;
+        if (json?.data?.group?.name) {
+          setLinkedGroupLabel(String(json.data.group.name));
+        } else {
+          setLinkedGroupLabel(null);
+        }
         const members = json?.data?.members;
         if (Array.isArray(members)) {
           setGroupSize(members.length);
@@ -304,8 +303,11 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
         setGroupSize(typeof count === "number" ? count : 0);
       })
       .catch(() => {
-        if (!cancelled) setGroupSize(0);
+        if (cancelled) return;
+        setGroupSize(0);
+        setLinkedGroupLabel(null);
       });
+
     return () => {
       cancelled = true;
     };
@@ -377,6 +379,12 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
   function removeDiscount(key: string) {
     setDiscounts((prev) => prev.filter((row) => row.key !== key));
   }
+
+  const linkedGroupName =
+    (ownedGroups ?? []).find((g) => g.id === groupId)?.name ??
+    linkedGroupLabel ??
+    null;
+
 
   function updateItem(key: string, patch: Partial<EditorItem>, recalc = true) {
     setItems((prev) =>
@@ -610,6 +618,23 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
     }
   }
 
+  async function deleteReceipt() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/receipts/${receiptId}`, { method: "DELETE" });
+      const parsed = await readApiJson<{ data: { deleted: boolean } }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      toast.success("Receipt deleted");
+      router.push(groupId ? `/groups/${groupId}` : "/receipts");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete receipt");
+    } finally {
+      setDeleting(false);
+      setDeleteConfirmOpen(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -662,9 +687,19 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
               size="sm"
               variant={isDirty ? "outline" : "default"}
               onClick={() => void save(true)}
-              disabled={saving}
+              disabled={saving || deleting}
             >
               <CheckCircle2 /> Finalize
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setDeleteConfirmOpen(true)}
+              disabled={saving || deleting}
+            >
+              {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete
             </Button>
           </div>
         ) : (
@@ -716,6 +751,11 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                     onChange={(e) => setGroupId(e.target.value || null)}
                   >
                     <option value="">Not linked — pick a group to split</option>
+                    {groupId &&
+                      linkedGroupName &&
+                      !(ownedGroups ?? []).some((g) => g.id === groupId) && (
+                        <option value={groupId}>{linkedGroupName}</option>
+                      )}
                     {(ownedGroups ?? []).map((g) => (
                       <option key={g.id} value={g.id}>
                         {g.name}
@@ -723,7 +763,9 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                     ))}
                   </select>
                   <p className="text-xs text-muted-foreground">
-                    Only groups you created can be linked. Members then pick what they got.
+                    {groupId && linkedGroupName
+                      ? `Linked to ${linkedGroupName}. Group split divides items across all ${groupSize || "…"} members.`
+                      : "Only groups you created can be linked. Pick one here to enable Group split on line items."}
                   </p>
                 </div>
               )}
@@ -770,8 +812,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                 <CardDescription>
                   {canEdit
                     ? groupId
-                      ? "Edit items and split — Group split divides each line equally among all members"
-                      : "Edit names, amounts, and how each item is split"
+                      ? `Edit names, amounts, and splits. Group split uses all ${groupSize || "…"} members of ${linkedGroupName ?? "this group"}.`
+                      : "Edit names, amounts, and splits. Link a group in Details above to enable Group split."
                     : "View only — the uploader manages line items"}
                 </CardDescription>
               </div>
@@ -852,6 +894,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                   }
                                   className="h-9"
                                   placeholder="Item"
+                                  clearOnFocusWhen={DEFAULT_ITEM_LABELS}
                                 />
                               ) : (
                                 <p className="font-medium leading-snug">{item.name}</p>
@@ -884,19 +927,9 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                       className="h-9 px-2 text-right tabular-nums"
                                       aria-label="Price"
                                     />
-                                    <EditableNumber
-                                      value={item.total_price}
-                                      min={0}
-                                      onCommit={(n) =>
-                                        updateItem(
-                                          item.key,
-                                          { total_price: n },
-                                          false
-                                        )
-                                      }
-                                      className="h-9 px-2 text-right tabular-nums"
-                                      aria-label="Total"
-                                    />
+                                    <p className="flex h-9 items-center justify-end px-2 text-right font-medium tabular-nums">
+                                      {formatPHP(item.total_price, currency)}
+                                    </p>
                                   </>
                                 ) : (
                                   <>
@@ -924,7 +957,15 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                   >
                                     <option value="one">1 person</option>
                                     <option value="number">N ways</option>
-                                    <option value="group" disabled={!groupId}>
+                                    <option
+                                      value="group"
+                                      disabled={!groupId}
+                                      title={
+                                        groupId
+                                          ? undefined
+                                          : "Link this receipt to a group in Details first"
+                                      }
+                                    >
                                       Group
                                       {groupSize > 0 ? ` (${groupSize})` : ""}
                                     </option>
@@ -1047,6 +1088,8 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                       )
                                     }
                                     className="h-9 border-transparent bg-transparent px-2 shadow-none focus-visible:border-input focus-visible:bg-surface-elevated/60"
+                                    placeholder="Item"
+                                    clearOnFocusWhen={DEFAULT_ITEM_LABELS}
                                   />
                                 ) : (
                                   <span className="font-medium">{item.name}</span>
@@ -1093,24 +1136,9 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                 )}
                               </td>
                               <td className="px-2 py-2 align-middle">
-                                {canEdit ? (
-                                  <EditableNumber
-                                    value={item.total_price}
-                                    min={0}
-                                    onCommit={(n) =>
-                                      updateItem(
-                                        item.key,
-                                        { total_price: n },
-                                        false
-                                      )
-                                    }
-                                    className="h-9 px-2 text-right tabular-nums"
-                                  />
-                                ) : (
-                                  <span className="block text-right font-medium tabular-nums">
-                                    {formatPHP(item.total_price, currency)}
-                                  </span>
-                                )}
+                                <span className="block text-right font-medium tabular-nums">
+                                  {formatPHP(item.total_price, currency)}
+                                </span>
                               </td>
                               <td className="px-3 py-2 align-middle">
                                 {canEdit ? (
@@ -1128,7 +1156,15 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
                                     >
                                       <option value="one">1 person</option>
                                       <option value="number">N ways</option>
-                                      <option value="group" disabled={!groupId}>
+                                      <option
+                                        value="group"
+                                        disabled={!groupId}
+                                        title={
+                                          groupId
+                                            ? undefined
+                                            : "Link this receipt to a group in Details first"
+                                        }
+                                      >
                                         Group
                                         {groupSize > 0 ? ` (${groupSize})` : ""}
                                       </option>
@@ -1364,6 +1400,27 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           </Card>
         </div>
       </div>
+
+      {deleteConfirmOpen && canEdit && (
+        <ConfirmModal
+          title="Delete receipt?"
+          description="All items, splits, and images will be removed. This cannot be undone."
+          highlight={
+            <p className="text-sm font-medium">
+              {merchant.trim() || "Untitled receipt"}
+            </p>
+          }
+          highlightClassName="border-destructive/30 bg-destructive/5"
+          confirmLabel="Delete receipt"
+          variant="destructive"
+          busy={deleting}
+          onConfirm={() => void deleteReceipt()}
+          onClose={() => {
+            if (deleting) return;
+            setDeleteConfirmOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1411,6 +1468,7 @@ function EditableNumber({
   min,
   className,
   id,
+  clearOnFocusWhenEmpty,
   "aria-label": ariaLabel,
 }: {
   value: number;
@@ -1418,10 +1476,14 @@ function EditableNumber({
   min?: number;
   className?: string;
   id?: string;
+  clearOnFocusWhenEmpty?: boolean;
   "aria-label"?: string;
 }) {
   const [text, setText] = useState(() => String(value));
   const focused = useRef(false);
+  const emptyValue = min ?? 0;
+  const shouldClearOnFocus =
+    clearOnFocusWhenEmpty ?? (min == null || min === 0);
 
   useEffect(() => {
     if (!focused.current) setText(String(value));
@@ -1429,7 +1491,7 @@ function EditableNumber({
 
   function commit(raw: string) {
     const n = Number(raw);
-    let next = raw === "" || Number.isNaN(n) ? (min ?? 0) : n;
+    let next = raw === "" || Number.isNaN(n) ? emptyValue : n;
     if (min != null && next < min) next = min;
     setText(String(next));
     onCommit(next);
@@ -1445,6 +1507,9 @@ function EditableNumber({
       value={text}
       onFocus={() => {
         focused.current = true;
+        if (shouldClearOnFocus && value === emptyValue) {
+          setText("");
+        }
       }}
       onChange={(e) => {
         const raw = e.target.value;

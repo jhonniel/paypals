@@ -6,6 +6,7 @@
  */
 
 import sharp, { type Sharp } from "sharp";
+import { convertHeicBufferToJpeg, isHeicFile } from "@/lib/convert-heic-server";
 
 export type PreprocessResult = {
   buffer: Buffer;
@@ -19,7 +20,7 @@ export type PreprocessResult = {
 const MAX_OCR_BYTES = 900_000; // stay under OCR.Space ~1MB free limit
 
 function isRasterImage(mime: string): boolean {
-  return /image\/(png|jpe?g|webp|gif)/i.test(mime);
+  return /image\/(png|jpe?g|webp|gif|heic|heif)/i.test(mime);
 }
 
 async function toOcrJpeg(pipeline: Sharp, steps: string[]): Promise<Buffer> {
@@ -56,7 +57,8 @@ async function toOcrJpeg(pipeline: Sharp, steps: string[]): Promise<Buffer> {
  */
 export async function preprocessReceiptImage(
   input: Buffer,
-  mimeType: string
+  mimeType: string,
+  fileName?: string
 ): Promise<PreprocessResult> {
   const steps: string[] = [];
 
@@ -71,8 +73,19 @@ export async function preprocessReceiptImage(
     };
   }
 
+  let working = input;
+  let workingMime = mimeType;
+  if (isHeicFile(mimeType, fileName)) {
+    working = await convertHeicBufferToJpeg(input);
+    workingMime = "image/jpeg";
+    steps.push("heic→jpeg");
+  }
+
   try {
-    let pipeline = sharp(input, { failOn: "none" }).rotate();
+    let pipeline = sharp(working, {
+      failOn: "none",
+      unlimited: isHeicFile(mimeType, fileName),
+    }).rotate();
     steps.push("exif-rotate");
 
     const meta = await pipeline.metadata();
@@ -136,17 +149,29 @@ export async function preprocessReceiptImage(
 /** Ensure any buffer is small enough for OCR.Space. */
 export async function compressForOcr(
   input: Buffer,
-  mimeType: string
+  mimeType: string,
+  fileName?: string
 ): Promise<{ buffer: Buffer; mimeType: "image/jpeg" | "image/png" }> {
   if (!isRasterImage(mimeType)) {
     return { buffer: input, mimeType: "image/jpeg" };
   }
-  if (input.length <= MAX_OCR_BYTES && /jpe?g/i.test(mimeType)) {
-    return { buffer: input, mimeType: "image/jpeg" };
+
+  let working = input;
+  let workingMime = mimeType;
+  if (isHeicFile(mimeType, fileName)) {
+    working = await convertHeicBufferToJpeg(input);
+    workingMime = "image/jpeg";
+  }
+
+  if (working.length <= MAX_OCR_BYTES && /jpe?g/i.test(workingMime)) {
+    return { buffer: working, mimeType: "image/jpeg" };
   }
   try {
     const steps: string[] = [];
-    const pipeline = sharp(input, { failOn: "none" }).rotate();
+    const pipeline = sharp(working, {
+      failOn: "none",
+      unlimited: isHeicFile(mimeType, fileName),
+    }).rotate();
     const meta = await pipeline.metadata();
     const longEdge = Math.max(meta.width ?? 0, meta.height ?? 0);
     let p = pipeline;

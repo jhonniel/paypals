@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatPHP } from "@/lib/money";
 import { signupInviteUrl } from "@/lib/signup-invite-url";
 import { SIGNUP_INVITE_RETENTION_DAYS } from "@/lib/signup-invite-cleanup";
+import { AdminAnnouncementsPanel } from "@/features/admin/admin-announcements";
 import { formatDistanceToNow } from "date-fns";
 
 type AdminData = {
@@ -457,6 +458,7 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
             <TabsTrigger value="invites">Invites</TabsTrigger>
             <TabsTrigger value="receipts">Receipts</TabsTrigger>
             <TabsTrigger value="ocr">OCR logs</TabsTrigger>
+            <TabsTrigger value="announcements">Announcements</TabsTrigger>
             <TabsTrigger value="flags">Feature flags</TabsTrigger>
             <TabsTrigger value="audit">Audit</TabsTrigger>
           </TabsList>
@@ -770,6 +772,10 @@ export function AdminPanelView({ currentUserId }: { currentUserId: string }) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="announcements" className="mt-4">
+          <AdminAnnouncementsPanel />
         </TabsContent>
 
         <TabsContent value="flags" className="mt-4 space-y-4">
