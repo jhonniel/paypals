@@ -30,6 +30,7 @@ export function ReceiptsList() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["receipts"],
     queryFn: fetchReceipts,
+    staleTime: 60_000,
   });
 
   return (

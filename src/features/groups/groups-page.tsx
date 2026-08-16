@@ -433,6 +433,7 @@ export function GroupsPageView() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["groups"],
     queryFn: fetchGroups,
+    staleTime: 90_000,
   });
   const [open, setOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);

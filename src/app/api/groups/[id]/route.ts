@@ -11,7 +11,6 @@ import {
 import { moneyNumber } from "@/lib/money";
 import {
   normalizePaymentMethods,
-  resolvePaymentQrUrl,
   toSharedPaymentMethods,
 } from "@/lib/payment-methods";
 import {
@@ -568,21 +567,11 @@ export async function GET(req: Request, { params }: Params) {
       }
     }
 
-    async function enrichMethodQr(
-      payerUserId: string | null,
+    function enrichMethodQr(
+      _payerUserId: string | null,
       method: ReturnType<typeof normalizePaymentMethods>[number]
     ) {
       if (method.qr_code_url) return method;
-
-      if (payerUserId) {
-        const fromPayerStorage = await resolvePaymentQrUrl(
-          supabase,
-          payerUserId,
-          method.id,
-          null
-        );
-        if (fromPayerStorage) return { ...method, qr_code_url: fromPayerStorage };
-      }
 
       const number = method.account_number.trim();
       if (number) {
@@ -594,65 +583,38 @@ export async function GET(req: Request, { params }: Params) {
         if (match?.method.qr_code_url) {
           return { ...method, qr_code_url: match.method.qr_code_url };
         }
-
-        for (const row of allMemberMethods) {
-          if (row.method.account_number.trim() !== number) continue;
-          const fromStorage = await resolvePaymentQrUrl(
-            supabase,
-            row.userId,
-            row.method.id,
-            null
-          );
-          if (fromStorage) return { ...method, qr_code_url: fromStorage };
-        }
       }
-
-      // Last resort: current user's uploaded QR (same payout number / single file)
-      const fromMe = await resolvePaymentQrUrl(
-        supabase,
-        user.id,
-        method.id,
-        null
-      );
-      if (fromMe) return { ...method, qr_code_url: fromMe };
 
       return method;
     }
 
-    const where_to_pay = (
-      await Promise.all(
-        [...payerIds].map(async (payerId) => {
-          const m = memberById.get(payerId);
-          const p = Array.isArray(m?.profiles) ? m?.profiles[0] : m?.profiles;
-          const profile = p as {
-            id?: string;
-            full_name?: string | null;
-            username?: string | null;
-            payment_methods?: unknown;
-          } | null;
-          const name =
-            profile?.full_name ||
-            profile?.username ||
-            m?.guest_name ||
-            "Payer";
-          const payerUserId = m?.user_id ?? profile?.id ?? null;
-          const methods = toSharedPaymentMethods(
-            await Promise.all(
-              normalizePaymentMethods(profile?.payment_methods).map((method) =>
-                method.show_qr
-                  ? enrichMethodQr(payerUserId, method)
-                  : Promise.resolve(method)
-              )
-            )
-          );
-          return {
-            member_id: payerId,
-            name,
-            methods,
-          };
-        })
-      )
-    ).filter((row) => row.methods.length > 0);
+    const where_to_pay = [...payerIds]
+      .map((payerId) => {
+        const m = memberById.get(payerId);
+        const p = Array.isArray(m?.profiles) ? m?.profiles[0] : m?.profiles;
+        const profile = p as {
+          id?: string;
+          full_name?: string | null;
+          username?: string | null;
+          payment_methods?: unknown;
+        } | null;
+        const name =
+          profile?.full_name ||
+          profile?.username ||
+          m?.guest_name ||
+          "Payer";
+        const methods = toSharedPaymentMethods(
+          normalizePaymentMethods(profile?.payment_methods).map((method) =>
+            method.show_qr ? enrichMethodQr(null, method) : method
+          )
+        );
+        return {
+          member_id: payerId,
+          name,
+          methods,
+        };
+      })
+      .filter((row) => row.methods.length > 0);
 
     let inviteCode = String(group.invite_code ?? "");
     if (

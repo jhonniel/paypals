@@ -6,6 +6,7 @@ import { Megaphone } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ConfirmModal } from "@/components/confirm-modal";
 import { AnnouncementReader } from "@/features/announcements/announcement-reader";
+import { useDeferredReady } from "@/hooks/use-deferred-ready";
 
 type PendingAnnouncement = {
   id: string;
@@ -21,6 +22,7 @@ export function AnnouncementGate({ userId }: { userId: string | null }) {
   const qc = useQueryClient();
   const [readerId, setReaderId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const deferredReady = useDeferredReady(800);
 
   const { data: pending = [] } = useQuery({
     queryKey: ["announcements-pending"],
@@ -30,9 +32,9 @@ export function AnnouncementGate({ userId }: { userId: string | null }) {
       if (!res.ok) throw new Error(json?.error?.message);
       return json.data as PendingAnnouncement[];
     },
-    enabled: Boolean(userId),
-    refetchOnWindowFocus: true,
-    staleTime: 60_000,
+    enabled: Boolean(userId) && deferredReady,
+    refetchOnWindowFocus: false,
+    staleTime: 120_000,
   });
 
   const current = pending[0] ?? null;

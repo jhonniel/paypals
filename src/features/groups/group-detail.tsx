@@ -646,7 +646,10 @@ export function GroupDetailView({
       if (!parsed.ok) throw new Error(parsed.message);
       return parsed.data.data;
     },
+    staleTime: 60_000,
   });
+
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
 
   const { data: friends } = useQuery({
     queryKey: ["friends"],
@@ -656,12 +659,13 @@ export function GroupDetailView({
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       return json.data as FriendRow[];
     },
+    enabled: inviteModalOpen,
+    staleTime: 60_000,
   });
 
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [addReceiptOpen, setAddReceiptOpen] = useState(false);
   const [claimReceiptId, setClaimReceiptId] = useState<string | null>(null);
   const [claimForMember, setClaimForMember] = useState<{

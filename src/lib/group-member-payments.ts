@@ -214,8 +214,9 @@ export async function getGroupMemberPayments(
   supabase: SupabaseClient,
   groupId: string,
   memberIds: string[],
-  options?: { since?: string }
+  options?: { since?: string; includeReceiptDetails?: boolean }
 ): Promise<MemberPaymentSummary[]> {
+  const includeReceiptDetails = options?.includeReceiptDetails !== false;
   const acc = new Map<
     string,
     {
@@ -312,36 +313,38 @@ export async function getGroupMemberPayments(
       }
 
       const receiptItems: MemberPaymentItem[] = [];
-      for (const line of share.lines) {
-        const asg = (assignmentsByItem.get(line.itemId) ?? []).find(
-          (a) => a.member_id === share.memberId
-        );
-        const qty =
-          asg?.share_quantity != null && asg.share_quantity > 0
-            ? Number(asg.share_quantity)
-            : 1;
-        const subs = subItemsById.get(line.itemId) ?? [];
-        receiptItems.push({
-          name: line.itemName,
-          quantity: qty,
-          amount: moneyNumber(line.amount),
-          ...(subs.length ? { sub_items: subs } : {}),
-        });
-      }
+      if (includeReceiptDetails) {
+        for (const line of share.lines) {
+          const asg = (assignmentsByItem.get(line.itemId) ?? []).find(
+            (a) => a.member_id === share.memberId
+          );
+          const qty =
+            asg?.share_quantity != null && asg.share_quantity > 0
+              ? Number(asg.share_quantity)
+              : 1;
+          const subs = subItemsById.get(line.itemId) ?? [];
+          receiptItems.push({
+            name: line.itemName,
+            quantity: qty,
+            amount: moneyNumber(line.amount),
+            ...(subs.length ? { sub_items: subs } : {}),
+          });
+        }
 
-      for (const adj of memberAdjustmentLines(
-        share.memberId,
-        share.itemsSubtotal,
-        summary.assignedTotal,
-        {
-          tax: Number(r.tax),
-          discount: Number(r.discount),
-          serviceCharge: Number(r.service_charge),
-          tip: Number(r.tip),
-        },
-        memberIds
-      )) {
-        receiptItems.push({ name: adj.name, quantity: 1, amount: adj.amount });
+        for (const adj of memberAdjustmentLines(
+          share.memberId,
+          share.itemsSubtotal,
+          summary.assignedTotal,
+          {
+            tax: Number(r.tax),
+            discount: Number(r.discount),
+            serviceCharge: Number(r.service_charge),
+            tip: Number(r.tip),
+          },
+          memberIds
+        )) {
+          receiptItems.push({ name: adj.name, quantity: 1, amount: adj.amount });
+        }
       }
 
       row.receipts.push({
@@ -413,43 +416,61 @@ export async function computeUserGroupSpend(
   );
   const groupIds = [...myMemberByGroup.keys()];
 
+  const { data: allGroupMembers } = await supabase
+    .from("group_members")
+    .select("id, group_id")
+    .in("group_id", groupIds);
+
+  const memberIdsByGroup = new Map<string, string[]>();
+  for (const member of allGroupMembers ?? []) {
+    const groupId = member.group_id as string;
+    const list = memberIdsByGroup.get(groupId) ?? [];
+    list.push(member.id as string);
+    memberIdsByGroup.set(groupId, list);
+  }
+
+  const groupResults = await Promise.all(
+    groupIds.map(async (groupId) => {
+      const myMemberId = myMemberByGroup.get(groupId);
+      if (!myMemberId) return null;
+
+      const memberIds = memberIdsByGroup.get(groupId) ?? [];
+      if (!memberIds.length) return null;
+
+      const summaryOpts = { includeReceiptDetails: false as const };
+      const [allPayments, monthPayments] = await Promise.all([
+        getGroupMemberPayments(supabase, groupId, memberIds, summaryOpts),
+        monthStart
+          ? getGroupMemberPayments(supabase, groupId, memberIds, {
+              ...summaryOpts,
+              since: monthStart,
+            })
+          : Promise.resolve(null),
+      ]);
+
+      const mine = allPayments.find((p) => p.member_id === myMemberId);
+      const mineMonth = monthPayments?.find((p) => p.member_id === myMemberId);
+
+      return {
+        totalShare: mine?.total ?? 0,
+        shareThisMonth: mineMonth?.total ?? 0,
+        totalOwes: mine?.owes ?? 0,
+        currency: mine?.currency ?? mineMonth?.currency ?? "PHP",
+      };
+    })
+  );
+
   let totalShare = 0;
   let shareThisMonth = 0;
   let totalOwes = 0;
   let currency = "PHP";
 
-  for (const groupId of groupIds) {
-    const myMemberId = myMemberByGroup.get(groupId);
-    if (!myMemberId) continue;
-
-    const { data: groupMembers } = await supabase
-      .from("group_members")
-      .select("id")
-      .eq("group_id", groupId);
-    const memberIds = (groupMembers ?? []).map((m) => m.id);
-    if (!memberIds.length) continue;
-
-    const allPayments = await getGroupMemberPayments(supabase, groupId, memberIds);
-    const mine = allPayments.find((p) => p.member_id === myMemberId);
-    if (mine) {
-      totalShare = moneyNumber(totalShare + mine.total);
-      totalOwes = moneyNumber(totalOwes + mine.owes);
-      currency = mine.currency;
-    }
-
-    if (monthStart) {
-      const monthPayments = await getGroupMemberPayments(
-        supabase,
-        groupId,
-        memberIds,
-        { since: monthStart }
-      );
-      const mineMonth = monthPayments.find((p) => p.member_id === myMemberId);
-      if (mineMonth) {
-        shareThisMonth = moneyNumber(shareThisMonth + mineMonth.total);
-        if (mineMonth.currency) currency = mineMonth.currency;
-      }
-    }
+  for (const row of groupResults) {
+    if (!row) continue;
+    totalShare = moneyNumber(totalShare + row.totalShare);
+    shareThisMonth = moneyNumber(shareThisMonth + row.shareThisMonth);
+    totalOwes = moneyNumber(totalOwes + row.totalOwes);
+    if (row.currency) currency = row.currency;
   }
 
   return { totalShare, shareThisMonth, totalOwes, currency };

@@ -26,8 +26,51 @@ export async function GET() {
 
     if (error) return fail(error.message, 400);
 
+    const membershipRows = memberships ?? [];
+    const groupIds = membershipRows.map((m) => m.group_id as string);
+
+    const [{ data: allGroupMembers }, { data: allProofs }] = await Promise.all([
+      groupIds.length
+        ? supabase.from("group_members").select("id, group_id").in("group_id", groupIds)
+        : Promise.resolve({ data: [] as { id: string; group_id: string }[] }),
+      groupIds.length
+        ? supabase
+            .from("group_payment_proofs")
+            .select("group_id, from_member_id, status, expected_amount, ocr_raw")
+            .in("group_id", groupIds)
+        : Promise.resolve({
+            data: [] as Array<{
+              group_id: string;
+              from_member_id: string;
+              status: string;
+              expected_amount: number;
+              ocr_raw: unknown;
+            }>,
+          }),
+    ]);
+
+    const memberIdsByGroup = new Map<string, string[]>();
+    for (const member of allGroupMembers ?? []) {
+      const groupId = member.group_id as string;
+      const list = memberIdsByGroup.get(groupId) ?? [];
+      list.push(member.id as string);
+      memberIdsByGroup.set(groupId, list);
+    }
+
+    const proofByMember = new Map<
+      string,
+      {
+        status: string;
+        expected_amount: number;
+        ocr_raw: unknown;
+      }
+    >();
+    for (const proof of allProofs ?? []) {
+      proofByMember.set(`${proof.group_id}:${proof.from_member_id}`, proof);
+    }
+
     const groups = await Promise.all(
-      (memberships ?? []).map(async (m) => {
+      membershipRows.map(async (m) => {
         const g = m.groups as unknown as
           | Record<string, unknown>
           | Record<string, unknown>[]
@@ -45,15 +88,12 @@ export async function GET() {
           created_at: string;
         };
 
-        const { data: groupMembers } = await supabase
-          .from("group_members")
-          .select("id")
-          .eq("group_id", m.group_id);
-        const memberIds = (groupMembers ?? []).map((member) => member.id);
+        const memberIds = memberIdsByGroup.get(m.group_id as string) ?? [];
         const payments = await getGroupMemberPayments(
           supabase,
           m.group_id as string,
-          memberIds
+          memberIds,
+          { includeReceiptDetails: false }
         );
         const pay = payments.find((payment) => payment.member_id === m.id);
         const payTotal = pay?.total ?? 0;
@@ -64,12 +104,7 @@ export async function GET() {
         let unpaid = owesTotal;
         let paid = false;
 
-        const { data: proof } = await supabase
-          .from("group_payment_proofs")
-          .select("status, expected_amount, ocr_raw")
-          .eq("group_id", m.group_id)
-          .eq("from_member_id", m.id)
-          .maybeSingle();
+        const proof = proofByMember.get(`${m.group_id}:${m.id}`);
 
         if (owesTotal > 0 || isBillPayer) {
           const proofMeta = parsePaymentProofSource(proof?.ocr_raw);

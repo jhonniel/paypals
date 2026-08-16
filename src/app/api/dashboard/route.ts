@@ -29,6 +29,7 @@ export async function GET() {
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
     const [
       receiptsRes,
@@ -41,7 +42,7 @@ export async function GET() {
       userSpend,
       palDebtsOpenRes,
       palDebtsOweRes,
-      allReceiptsSpendRes,
+      spendReceiptsRes,
       unclaimed,
       palCreditsRes,
       palCreditsOweRes,
@@ -86,7 +87,12 @@ export async function GET() {
         .select("id, creditor_id, amount, amount_received, currency")
         .eq("debtor_id", user.id)
         .eq("status", "open"),
-      supabase.from("receipts").select("total").eq("created_by", user.id),
+      supabase
+        .from("receipts")
+        .select("total, created_at")
+        .eq("created_by", user.id)
+        .order("created_at", { ascending: false })
+        .limit(500),
       computeCollectorUnclaimed(supabase, user.id),
       supabase
         .from("pal_debtor_credits")
@@ -210,11 +216,9 @@ export async function GET() {
 
     const palDebtsOpenTotal = sumPalPartyTotals(palOwedTotals);
     const palDebtsOweTotal = sumPalPartyTotals(palOweTotals);
+    const spendReceipts = spendReceiptsRes.data ?? [];
     const overallSpent = moneyNumber(
-      (allReceiptsSpendRes.data ?? []).reduce(
-        (sum, r) => sum + Number(r.total ?? 0),
-        0
-      )
+      spendReceipts.reduce((sum, r) => sum + Number(r.total ?? 0), 0)
     );
     const balanceToCollect = moneyNumber(
       owedToYou.totalOwed + palDebtsOpenTotal + unclaimed.totalValue
@@ -235,14 +239,12 @@ export async function GET() {
       });
     }
 
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-    const { data: chartReceipts } = await supabase
-      .from("receipts")
-      .select("total, created_at")
-      .eq("created_by", user.id)
-      .gte("created_at", sixMonthsAgo.toISOString());
+    const sixMonthsAgoIso = sixMonthsAgo.toISOString();
+    const chartReceipts = spendReceipts.filter(
+      (r) => new Date(r.created_at) >= sixMonthsAgo
+    );
 
-    for (const r of chartReceipts ?? []) {
+    for (const r of chartReceipts) {
       const d = new Date(r.created_at);
       const idx =
         (d.getFullYear() - sixMonthsAgo.getFullYear()) * 12 +

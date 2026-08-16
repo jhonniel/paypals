@@ -539,6 +539,7 @@ export function PalOwesMePageView({
       if (!parsed.ok) throw new Error(parsed.message);
       return parsed.data.data;
     },
+    staleTime: 60_000,
   });
 
   const { data: allData, isLoading: allLoading } = useQuery({
@@ -560,6 +561,7 @@ export function PalOwesMePageView({
         credits: parsed.data.data.credits ?? [],
       };
     },
+    staleTime: 60_000,
   });
 
   const debts = data?.debts ?? [];

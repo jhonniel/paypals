@@ -8,6 +8,7 @@ import { Bell, Megaphone, Users, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { useNotificationsRealtime } from "@/hooks/use-realtime";
+import { useDeferredReady } from "@/hooks/use-deferred-ready";
 import { AnnouncementReader } from "@/features/announcements/announcement-reader";
 import { announcementIdFromLink } from "@/lib/announcements";
 import { cn } from "@/utils/cn";
@@ -41,12 +42,13 @@ function formatUnreadCount(count: number) {
 export function NotificationsBell({ userId }: { userId: string | null }) {
   const qc = useQueryClient();
   const [readerId, setReaderId] = useState<string | null>(null);
+  const deferredReady = useDeferredReady();
 
   const invalidate = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["notifications"] });
   }, [qc]);
 
-  useNotificationsRealtime(userId, invalidate);
+  useNotificationsRealtime(deferredReady ? userId : null, invalidate);
 
   const { data } = useQuery({
     queryKey: ["notifications"],
@@ -59,7 +61,8 @@ export function NotificationsBell({ userId }: { userId: string | null }) {
         unreadCount: Number(json.meta?.unread_count ?? 0),
       } satisfies NotificationsPayload;
     },
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && deferredReady,
+    staleTime: 60_000,
   });
 
   const items = data?.items ?? [];

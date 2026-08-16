@@ -127,6 +127,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       return json.data as FriendRow[];
     },
+    staleTime: 60_000,
   });
 
   const { data: balances, isLoading: balancesLoading } = useQuery({
@@ -137,6 +138,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
       return json.data as FriendBalanceRow[];
     },
+    staleTime: 90_000,
   });
 
   const balanceByUserId = useMemo(() => {
