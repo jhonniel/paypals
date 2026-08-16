@@ -227,7 +227,7 @@ export async function POST(request: Request) {
       settled_at: null,
     };
 
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from("pal_debts")
       .insert(insertRow)
       .select(debtSelectCreditorWithReceived)

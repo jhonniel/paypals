@@ -50,7 +50,7 @@ async function loadGroupReceiptsForOwed(
 ): Promise<ReceiptRow[]> {
   if (!groupIds.length) return [];
 
-  let res = await supabase
+  const res = await supabase
     .from("receipts")
     .select(
       "id, currency, tax, discount, service_charge, tip, paid_by_member_id, group_id"
@@ -83,7 +83,7 @@ async function loadReceiptItemsForOwed(
 ): Promise<ItemRow[]> {
   if (!receiptIds.length) return [];
 
-  let res = await supabase
+  const res = await supabase
     .from("receipt_items")
     .select("id, receipt_id, name, quantity, total_price, split_mode, split_n")
     .in("receipt_id", receiptIds);
