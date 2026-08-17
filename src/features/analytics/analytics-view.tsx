@@ -780,14 +780,15 @@ export function AnalyticsView() {
               <Users className="h-4 w-4" /> User ranking — bill share
             </CardTitle>
             <CardDescription>
-              Ranked by total assigned share across all receipts and groups.
+              Ranked by total assigned share across all receipts and groups. Top 10
+              shown — scroll for more.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {data.rankedUsersByShare.length === 0 ? (
               <p className="text-sm text-muted-foreground">No bill share data yet.</p>
             ) : (
-              <ul className="space-y-3">
+              <ul className="max-h-[calc(3.75rem*10)] space-y-3 overflow-y-auto overscroll-contain pr-1 [-webkit-overflow-scrolling:touch]">
                 {data.rankedUsersByShare.map((u) => (
                   <li
                     key={`share-${u.id}`}

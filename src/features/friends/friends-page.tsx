@@ -81,6 +81,8 @@ type PersonHit = {
   username: string | null;
   avatar_url?: string | null;
   email?: string | null;
+  is_guest?: boolean;
+  guest_name?: string | null;
 };
 
 function initials(name: string) {
@@ -301,7 +303,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                   id="uname"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search name, username, or email…"
+                  placeholder="Search name, username, email, or guest…"
                   className="pl-9"
                   autoComplete="off"
                 />
@@ -320,9 +322,11 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                 ) : (
                   <ul className="divide-y divide-border">
                     {people.map((p) => {
-                      const label = p.full_name || p.username || "User";
-                      const relation = relatedIds.get(p.id);
-                      const busy = busyId === p.id;
+                      const isGuest = Boolean(p.is_guest);
+                      const label =
+                        p.full_name || p.guest_name || p.username || "User";
+                      const relation = isGuest ? undefined : relatedIds.get(p.id);
+                      const busy = !isGuest && busyId === p.id;
                       return (
                         <li
                           key={p.id}
@@ -338,18 +342,29 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium">
                                 {label}
+                                {isGuest ? (
+                                  <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                                    guest
+                                  </span>
+                                ) : null}
                               </p>
                               <p className="truncate text-xs text-muted-foreground">
-                                {[
-                                  p.username ? `@${p.username}` : null,
-                                  p.email,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || "No username"}
+                                {isGuest
+                                  ? p.email || "Guest seat — add via Groups"
+                                  : [
+                                      p.username ? `@${p.username}` : null,
+                                      p.email,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ") || "No username"}
                               </p>
                             </div>
                           </div>
-                          {relation === "accepted" ? (
+                          {isGuest ? (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              Guest seat
+                            </span>
+                          ) : relation === "accepted" ? (
                             <span className="shrink-0 text-xs text-muted-foreground">
                               Friends
                             </span>
@@ -390,7 +405,7 @@ export function FriendsPageView({ currentUserId }: { currentUserId: string }) {
 
             {searchQ.length > 0 && searchQ.length < 2 && (
               <p className="text-xs text-muted-foreground">
-                Type at least 2 characters to search by name, username, or email.
+                Type at least 2 characters to search by name, username, email, or guest seat.
               </p>
             )}
 

@@ -738,6 +738,11 @@ export function GroupDetailView({
   const memberUserIds = new Set(
     (data?.members ?? []).map((m) => m.user_id).filter(Boolean) as string[]
   );
+  const memberGuestNames = new Set(
+    (data?.members ?? [])
+      .map((m) => m.guest_name?.trim().toLowerCase())
+      .filter(Boolean) as string[]
+  );
 
   const acceptedFriends = (friends ?? [])
     .filter((f) => f.status === "accepted")
@@ -818,8 +823,9 @@ export function GroupDetailView({
     }
   }
 
-  async function addGuest(e: React.FormEvent) {
-    e.preventDefault();
+  async function addGuestByName(name: string, email?: string | null) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
     setBusy(true);
     try {
       const res = await fetch(`/api/groups/${groupId}/members`, {
@@ -827,8 +833,8 @@ export function GroupDetailView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "guest",
-          guest_name: guestName,
-          ...(guestEmail.trim() ? { guest_email: guestEmail.trim() } : {}),
+          guest_name: trimmed,
+          ...(email?.trim() ? { guest_email: email.trim() } : {}),
         }),
       });
       const json = await res.json();
@@ -838,7 +844,7 @@ export function GroupDetailView({
       setGuestEmail("");
       setInviteModalOpen(false);
       await qc.invalidateQueries({ queryKey: ["group", groupId] });
-      if (json.data?.invite_token && guestEmail.trim()) {
+      if (json.data?.invite_token && email?.trim()) {
         const origin =
           typeof window !== "undefined"
             ? window.location.origin
@@ -852,6 +858,11 @@ export function GroupDetailView({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function addGuest(e: React.FormEvent) {
+    e.preventDefault();
+    await addGuestByName(guestName, guestEmail);
   }
 
   async function addByLookup(payload: { username?: string; email?: string }) {
@@ -1849,12 +1860,14 @@ export function GroupDetailView({
           inviteCode={data.group.invite_code}
           friends={acceptedFriends}
           memberUserIds={memberUserIds}
+          memberGuestNames={memberGuestNames}
           guestName={guestName}
           guestEmail={guestEmail}
           onCopyInvite={() => void copyInvite()}
           onGuestNameChange={setGuestName}
           onGuestEmailChange={setGuestEmail}
           onAddFriend={(id) => void addFriend(id)}
+          onAddGuestByName={(name, email) => void addGuestByName(name, email)}
           onAddByLookup={(payload) => void addByLookup(payload)}
           onAddGuest={(e) => void addGuest(e)}
           onClose={() => setInviteModalOpen(false)}
@@ -2043,12 +2056,14 @@ function InviteMembersModal({
   inviteCode,
   friends,
   memberUserIds,
+  memberGuestNames,
   guestName,
   guestEmail,
   onCopyInvite,
   onGuestNameChange,
   onGuestEmailChange,
   onAddFriend,
+  onAddGuestByName,
   onAddByLookup,
   onAddGuest,
   onClose,
@@ -2064,12 +2079,14 @@ function InviteMembersModal({
     email: string | null;
   }>;
   memberUserIds: Set<string>;
+  memberGuestNames: Set<string>;
   guestName: string;
   guestEmail: string;
   onCopyInvite: () => void;
   onGuestNameChange: (v: string) => void;
   onGuestEmailChange: (v: string) => void;
   onAddFriend: (id: string) => void;
+  onAddGuestByName: (name: string, email?: string | null) => void;
   onAddByLookup: (payload: { username?: string; email?: string }) => void;
   onAddGuest: (e: React.FormEvent) => void;
   onClose: () => void;
@@ -2092,6 +2109,8 @@ function InviteMembersModal({
         username: string | null;
         email: string | null;
         avatar_url: string | null;
+        is_guest?: boolean;
+        guest_name?: string | null;
       }>;
     },
     staleTime: 15_000,
@@ -2105,7 +2124,13 @@ function InviteMembersModal({
       .some((part) => String(part).toLowerCase().includes(q));
   });
 
-  const people = (searchHits ?? []).filter((p) => !memberUserIds.has(p.id));
+  const people = (searchHits ?? []).filter((p) => {
+    if (p.is_guest) {
+      const name = (p.guest_name || p.full_name || "").trim().toLowerCase();
+      return name.length > 0 && !memberGuestNames.has(name);
+    }
+    return !memberUserIds.has(p.id);
+  });
 
   async function onSubmitUserLookup(e: React.FormEvent) {
     e.preventDefault();
@@ -2291,7 +2316,7 @@ function InviteMembersModal({
                       id="add-user-search"
                       value={userQuery}
                       onChange={(e) => setUserQuery(e.target.value)}
-                      placeholder="Search name, username, or email…"
+                      placeholder="Search name, username, email, or guest…"
                       className="pl-9"
                       autoComplete="off"
                     />
@@ -2309,22 +2334,35 @@ function InviteMembersModal({
                       ) : (
                         <ul className="divide-y divide-border">
                           {people.map((p) => {
-                            const label = p.full_name || p.username || p.email || "User";
-                            const inGroup = memberUserIds.has(p.id);
+                            const isGuest = Boolean(p.is_guest);
+                            const label =
+                              p.full_name || p.guest_name || p.username || p.email || "User";
+                            const inGroup = isGuest
+                              ? memberGuestNames.has(label.trim().toLowerCase())
+                              : memberUserIds.has(p.id);
                             return (
                               <li
                                 key={p.id}
                                 className="flex items-center justify-between gap-3 px-3 py-2.5"
                               >
                                 <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium">{label}</p>
+                                  <p className="truncate text-sm font-medium">
+                                    {label}
+                                    {isGuest ? (
+                                      <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                                        guest
+                                      </span>
+                                    ) : null}
+                                  </p>
                                   <p className="truncate text-xs text-muted-foreground">
-                                    {[
-                                      p.username ? `@${p.username}` : null,
-                                      p.email,
-                                    ]
-                                      .filter(Boolean)
-                                      .join(" · ") || "No username"}
+                                    {isGuest
+                                      ? p.email || "Guest seat from your groups"
+                                      : [
+                                          p.username ? `@${p.username}` : null,
+                                          p.email,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(" · ") || "No username"}
                                   </p>
                                 </div>
                                 {inGroup ? (
@@ -2336,7 +2374,14 @@ function InviteMembersModal({
                                     type="button"
                                     size="sm"
                                     disabled={busy}
-                                    onClick={() => onAddFriend(p.id)}
+                                    onClick={() =>
+                                      isGuest
+                                        ? void onAddGuestByName(
+                                            p.guest_name || p.full_name || label,
+                                            p.email
+                                          )
+                                        : onAddFriend(p.id)
+                                    }
                                   >
                                     {busy ? (
                                       <Loader2 className="animate-spin" />

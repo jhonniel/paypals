@@ -101,6 +101,8 @@ type PersonHit = {
   username: string | null;
   avatar_url?: string | null;
   email?: string | null;
+  is_guest?: boolean;
+  guest_name?: string | null;
 };
 
 function initials(name: string) {
@@ -2123,12 +2125,14 @@ function AddDebtModal({
                   <p className="px-2 py-3 text-center text-xs text-muted-foreground">
                     Type at least 2 characters
                   </p>
-                ) : searchHits.length === 0 ? (
+                ) : searchHits.filter((hit) => !hit.is_guest).length === 0 ? (
                   <p className="px-2 py-3 text-center text-xs text-muted-foreground">
                     No users found
                   </p>
                 ) : (
-                  searchHits.map((hit) => (
+                  searchHits
+                    .filter((hit) => !hit.is_guest)
+                    .map((hit) => (
                     <button
                       key={hit.id}
                       type="button"

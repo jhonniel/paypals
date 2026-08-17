@@ -38,7 +38,13 @@ const adminNavItems = [
 type SearchResult = {
   receipts: Array<{ id: string; merchant: string | null }>;
   groups: Array<{ id: string; name: string }>;
-  people: Array<{ id: string; full_name: string | null; username: string | null }>;
+  people: Array<{
+    id: string;
+    full_name: string | null;
+    username: string | null;
+    is_guest?: boolean;
+    guest_name?: string | null;
+  }>;
 };
 
 export function CommandPalette({
@@ -164,7 +170,8 @@ export function CommandPalette({
                         className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm aria-selected:bg-accent sm:py-2.5"
                       >
                         <Search className="h-4 w-4 text-muted-foreground" />
-                        {p.full_name || p.username || "User"}
+                        {p.full_name || p.guest_name || p.username || "User"}
+                        {p.is_guest ? " (guest)" : ""}
                       </Command.Item>
                     ))}
                   </Command.Group>
