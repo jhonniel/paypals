@@ -164,18 +164,17 @@ export async function PATCH(request: Request, { params }: Params) {
       if (discountError) return fail(discountError, 400);
     }
 
-    if (fields.group_id) {
-      if (existing.group_id === fields.group_id) {
-        return fail("Receipt is already linked to this group", 400);
-      }
-      const { data: group } = await supabase
-        .from("groups")
-        .select("id, created_by")
-        .eq("id", fields.group_id)
-        .maybeSingle();
-      if (!group) return fail("Group not found", 404);
-      if (group.created_by !== user.id) {
-        return fail("Only the group creator can link receipts to this group", 403);
+    if (fields.group_id !== undefined && fields.group_id !== existing.group_id) {
+      if (fields.group_id) {
+        const { data: group } = await supabase
+          .from("groups")
+          .select("id, created_by")
+          .eq("id", fields.group_id)
+          .maybeSingle();
+        if (!group) return fail("Group not found", 404);
+        if (group.created_by !== user.id) {
+          return fail("Only the group creator can link receipts to this group", 403);
+        }
       }
     }
 
