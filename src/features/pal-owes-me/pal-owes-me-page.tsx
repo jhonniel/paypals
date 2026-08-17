@@ -242,7 +242,6 @@ function PalPaymentProofForm({
 }) {
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
-  const [txn, setTxn] = useState("");
   const [proofName, setProofName] = useState<string | null>(null);
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -252,55 +251,39 @@ function PalPaymentProofForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const parsedAmount = amount.trim() ? Number(amount) : null;
+
     if (ocrOnly) {
       if (!proofFile) {
         toast.error("Upload a payment receipt screenshot");
         return;
       }
-    } else {
-      const parsedAmount = amount.trim() ? Number(amount) : null;
-      if (!proofFile && (!parsedAmount || parsedAmount <= 0)) {
-        toast.error("Enter an amount or upload a payment receipt");
-        return;
-      }
-      if (parsedAmount != null && parsedAmount <= 0) {
-        toast.error("Enter a valid amount");
-        return;
-      }
+    } else if (!parsedAmount || parsedAmount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
     }
+
     setSubmitting(true);
     try {
       let res: Response;
-      const parsedAmount = amount.trim() ? Number(amount) : null;
-      if (proofFile || ocrOnly) {
+      if (ocrOnly) {
         const ready = await prepareImageFileForUpload(proofFile!);
         const form = new FormData();
-        form.append(isCreditor ? "debtor_id" : "creditor_id", counterpartyId);
+        form.append("creditor_id", counterpartyId);
         form.append("file", ready);
         form.append("currency", currency);
-        if (!ocrOnly && parsedAmount != null) form.append("amount", String(parsedAmount));
         if (note.trim()) form.append("note", note.trim());
-        if (!ocrOnly && txn.trim()) form.append("transaction_number", txn.trim());
         res = await fetch("/api/pal-debts/received/proof", { method: "POST", body: form });
       } else {
         res = await fetch("/api/pal-debts/received", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            isCreditor
-              ? {
-                  debtor_id: counterpartyId,
-                  amount: parsedAmount,
-                  currency,
-                  note: note.trim() || null,
-                }
-              : {
-                  creditor_id: counterpartyId,
-                  amount: parsedAmount,
-                  currency,
-                  note: note.trim() || null,
-                }
-          ),
+          body: JSON.stringify({
+            debtor_id: counterpartyId,
+            amount: parsedAmount,
+            currency,
+            note: note.trim() || null,
+          }),
         });
       }
       const parsed = await readApiJson<{
@@ -331,7 +314,6 @@ function PalPaymentProofForm({
       );
       if (!ocrOnly) {
         setAmount("");
-        setTxn("");
       }
       setNote("");
       setProofFile(null);
@@ -364,90 +346,70 @@ function PalPaymentProofForm({
         {". "}
         {ocrOnly
           ? "Amount paid and transaction ref are read from your screenshot only. Overpayments become credit on your balance."
-          : compact
-            ? "Scan receipt to auto-fill amount and ref."
-            : "Receipt is scanned only — the image is not saved. Amount and ref are extracted automatically."}
+          : "Enter the amount they paid you. Overpayments become credit for future lent entries."}
       </p>
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefix}-proof`}>Payment receipt</Label>
-        <label
-          htmlFor={`${idPrefix}-proof`}
-          className={cn(
-            "flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-emerald-500/40 bg-background/80 px-3 py-3 text-center transition hover:bg-emerald-500/5",
-            submitting && "pointer-events-none opacity-60"
-          )}
-        >
-          <Upload className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-          <span className="text-xs font-medium">{proofName ?? "Scan receipt screenshot"}</span>
-          <span className="text-[10px] text-muted-foreground">
-            PNG, JPG, WEBP, or HEIC · max 10MB
-          </span>
-          <input
-            id={`${idPrefix}-proof`}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
-            className="sr-only"
-            disabled={submitting}
+      {isCreditor ? (
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-amount`}>Amount received ({currency})</Label>
+          <Input
+            id={`${idPrefix}-amount`}
+            type="text"
+            inputMode="decimal"
+            value={amount}
             onChange={(e) => {
-              const file = e.target.files?.[0] ?? null;
-              setProofFile(file);
-              setProofName(file?.name ?? null);
-              e.target.value = "";
+              const raw = e.target.value;
+              if (raw === "" || /^\d*\.?\d*$/.test(raw)) setAmount(raw);
             }}
+            placeholder="0.00"
+            autoFocus
           />
-        </label>
-        {proofFile ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground"
-            disabled={submitting}
-            onClick={() => {
-              setProofFile(null);
-              setProofName(null);
-            }}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-proof`}>Payment receipt</Label>
+          <label
+            htmlFor={`${idPrefix}-proof`}
+            className={cn(
+              "flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-emerald-500/40 bg-background/80 px-3 py-3 text-center transition hover:bg-emerald-500/5",
+              submitting && "pointer-events-none opacity-60"
+            )}
           >
-            Remove receipt
-          </Button>
-        ) : null}
-      </div>
-      {!ocrOnly ? (
-        <>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-amount`}>
-              {isCreditor ? "Amount received" : "Amount paid"} ({currency})
-              {proofFile ? (
-                <span className="font-normal text-muted-foreground">
-                  {" "}
-                  — optional if receipt uploaded
-                </span>
-              ) : null}
-            </Label>
-            <Input
-              id={`${idPrefix}-amount`}
-              type="text"
-              inputMode="decimal"
-              value={amount}
+            <Upload className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-xs font-medium">{proofName ?? "Scan receipt screenshot"}</span>
+            <span className="text-[10px] text-muted-foreground">
+              PNG, JPG, WEBP, or HEIC · max 10MB
+            </span>
+            <input
+              id={`${idPrefix}-proof`}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
+              className="sr-only"
+              disabled={submitting}
               onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === "" || /^\d*\.?\d*$/.test(raw)) setAmount(raw);
+                const file = e.target.files?.[0] ?? null;
+                setProofFile(file);
+                setProofName(file?.name ?? null);
+                e.target.value = "";
               }}
-              placeholder="0.00"
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-txn`}>Transaction number (optional)</Label>
-            <Input
-              id={`${idPrefix}-txn`}
-              type="text"
-              value={txn}
-              onChange={(e) => setTxn(e.target.value)}
-              placeholder="Auto-read from receipt or enter manually"
-            />
-          </div>
-        </>
-      ) : null}
+          </label>
+          {proofFile ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground"
+              disabled={submitting}
+              onClick={() => {
+                setProofFile(null);
+                setProofName(null);
+              }}
+            >
+              Remove receipt
+            </Button>
+          ) : null}
+        </div>
+      )}
       {!compact ? (
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}-note`}>Note (optional)</Label>
@@ -480,15 +442,7 @@ function PalPaymentProofForm({
         ) : (
           <>
             <Check className="h-4 w-4" />
-            {ocrOnly
-              ? "Scan & save payment"
-              : proofFile
-                ? isCreditor
-                  ? "Scan & save received"
-                  : "Scan & save payment"
-                : isCreditor
-                  ? "Save received"
-                  : "Save payment"}
+            {ocrOnly ? "Scan & save payment" : "Save received"}
           </>
         )}
       </Button>
