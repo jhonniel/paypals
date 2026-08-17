@@ -11,6 +11,8 @@ import { cn } from "@/utils/cn";
 import { readApiJson } from "@/lib/api-client";
 import {
   isItemHiddenFromMember,
+  itemPickShareAmount,
+  itemPickShareLabel,
   itemSplitModeLabel,
   type ItemSplitMode,
 } from "@/lib/splits";
@@ -442,18 +444,15 @@ export function GroupClaimGate({
 
   function shareAmountFor(item: ClaimItem, myQty: number): number {
     const mode = (item.split_mode ?? "among_n") as ItemSplitMode;
-    const total = Number(item.total_price) || 0;
-    if (mode === "among_group") {
-      const n = Math.max(1, memberCount);
-      return total / n;
-    }
-    if (myQty <= 0) return 0;
-    const splitN = Math.max(1, Math.floor(Number(item.split_n) || 1));
-    if (mode === "among_n" && splitN > 1) {
-      return (total * myQty) / splitN;
-    }
-    const qtyOnReceipt = Math.max(0.001, Number(item.quantity) || 1);
-    return (total / qtyOnReceipt) * myQty;
+    const qty = mode === "among_group" ? 1 : myQty > 0 ? myQty : 1;
+    return itemPickShareAmount(
+      Number(item.total_price) || 0,
+      Number(item.quantity) || 1,
+      mode,
+      item.split_n ?? 1,
+      memberCount,
+      qty
+    );
   }
 
   const payTotal = useMemo(() => {
@@ -591,7 +590,13 @@ export function GroupClaimGate({
                 ? shareAmountFor(item, 1)
                 : on
                   ? shareAmountFor(item, myQty)
-                  : 0;
+                  : shareAmountFor(item, 1);
+              const priceLabel = itemPickShareLabel(
+                mode,
+                item.split_n,
+                item.quantity,
+                on || wholeGroup
+              );
               const otherPickers = formatItemPickers(item, claimMemberId);
 
               return (
@@ -629,18 +634,17 @@ export function GroupClaimGate({
                         <span className="truncate font-medium">{softName(item.name)}</span>
                       </span>
                       <span className="shrink-0 text-right tabular-nums text-muted-foreground">
-                        {(on || wholeGroup) && myShare > 0 ? (
-                          <>
-                            <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                              You pay
-                            </span>
-                            <span className="font-medium text-foreground">
-                              {money(myShare, currency)}
-                            </span>
-                          </>
-                        ) : (
-                          money(item.total_price, currency)
-                        )}
+                        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                          {priceLabel}
+                        </span>
+                        <span
+                          className={cn(
+                            "font-medium",
+                            on || wholeGroup ? "text-foreground" : "text-muted-foreground"
+                          )}
+                        >
+                          {money(myShare, currency)}
+                        </span>
                       </span>
                     </span>
                     {metaParts.length > 0 && (

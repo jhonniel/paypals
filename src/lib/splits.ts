@@ -399,6 +399,44 @@ export function itemSplitPerPersonAmount(
   return null;
 }
 
+/** Share amount to show while picking or after a claim (not the full line total). */
+export function itemPickShareAmount(
+  itemTotal: number,
+  quantity: number,
+  mode: ItemSplitMode | null | undefined,
+  splitN: number | null | undefined,
+  groupSize: number,
+  claimedQty: number
+): number {
+  const total = Number(itemTotal) || 0;
+  const perPerson = itemSplitPerPersonAmount(total, mode, splitN, groupSize);
+  if (perPerson != null) {
+    return moneyNumber(perPerson * Math.max(1, claimedQty));
+  }
+  const qtyOnReceipt = Math.max(0.001, Number(quantity) || 1);
+  const q = Math.max(1, claimedQty);
+  if (mode === "among_claimers" && qtyOnReceipt > 1) {
+    return moneyNumber((total / qtyOnReceipt) * q);
+  }
+  return moneyNumber(total);
+}
+
+export function itemPickShareLabel(
+  mode: ItemSplitMode | null | undefined,
+  splitN: number | null | undefined,
+  quantity: number,
+  selected: boolean
+): string {
+  if (selected) return "You pay";
+  const resolved = mode ?? "among_n";
+  const n = Math.max(1, Math.floor(Number(splitN) || 1));
+  const qty = Math.max(0.001, Number(quantity) || 1);
+  if (resolved === "among_group") return "Your share";
+  if (resolved === "among_n" && n > 1) return "Per share";
+  if (resolved === "among_claimers" && qty > 1) return "Per unit";
+  return "You pay";
+}
+
 function ensureMember(
   memberMap: Map<string, MemberShare>,
   memberId: string
