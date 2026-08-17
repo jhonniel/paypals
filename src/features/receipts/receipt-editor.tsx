@@ -519,6 +519,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
           group_id: groupId,
           status: finalize ? "finalized" : "edited",
           items: items.map((i, index) => ({
+            ...(i.id ? { id: i.id } : {}),
             name: i.name,
             quantity: i.quantity,
             unit_price: i.unit_price,
@@ -529,6 +530,7 @@ export function ReceiptEditor({ receiptId }: { receiptId: string }) {
               (i.split_mode ?? "among_n") === "among_n"
                 ? Math.max(1, i.split_n ?? 1)
                 : null,
+            ...(i.sub_items?.length ? { sub_items: i.sub_items } : {}),
           })),
         }),
       });
