@@ -414,7 +414,17 @@ export async function GET(req: Request, { params }: Params) {
             asg?.share_quantity != null && asg.share_quantity > 0
               ? Number(asg.share_quantity)
               : 1;
-          const lineAmount = moneyNumber(line.amount);
+          const itemMeta = r.items.find((i) => i.id === line.itemId);
+          let lineAmount = moneyNumber(line.amount);
+          if (
+            (itemMeta as { split_mode?: string } | undefined)?.split_mode ===
+              "among_group" &&
+            memberIds.length > 0
+          ) {
+            lineAmount = moneyNumber(
+              Number(itemMeta?.total_price ?? 0) / memberIds.length
+            );
+          }
           const itemTotal = itemTotalByItemId.get(line.itemId) ?? 0;
           const shareRatio =
             itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
@@ -425,7 +435,11 @@ export async function GET(req: Request, { params }: Params) {
               : rawSubs;
           acc.items.push({
             name: line.itemName,
-            quantity: qty,
+            quantity:
+              (itemMeta as { split_mode?: string } | undefined)?.split_mode ===
+              "among_group"
+                ? 1
+                : qty,
             amount: lineAmount,
             merchant: r.merchant,
             ...(scaledSubs.length ? { sub_items: scaledSubs } : {}),

@@ -496,15 +496,21 @@ function GroupReceiptCard({
                       {titleCaseItem(item.name)}
                     </span>
                     <span className="tabular-nums text-xs text-muted-foreground">
-                      {item.quantity !== 1 ? `×${item.quantity}` : ""}
+                      {isGroupSplit
+                        ? groupMemberCount > 0
+                          ? "group"
+                          : ""
+                        : item.quantity !== 1
+                          ? `×${item.quantity}`
+                          : ""}
                     </span>
                     <span className="min-w-[4.75rem] text-right tabular-nums text-muted-foreground">
                       <span className="block font-medium text-foreground">
                         {money(displayPrice, currency)}
                       </span>
-                      {showShareLabel ? (
+                      {showShareLabel || isGroupSplit ? (
                         <span className="text-[9px] uppercase tracking-wide">
-                          share
+                          {isGroupSplit ? "your share" : "share"}
                         </span>
                       ) : null}
                     </span>

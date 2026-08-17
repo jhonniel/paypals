@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Loader2, Minus, Plus, X } from "lucide-react";
+import { ArrowLeft, Check, Loader2, Minus, Plus, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -563,41 +563,51 @@ export function GroupClaimGate({
               const wholeGroup = mode === "among_group";
               const splitN = Number(item.split_n) || 1;
               const isOnePerson = mode === "among_n" && splitN <= 1;
-              const hint = itemSplitModeLabel(mode, item.split_n);
               const max = maxForItem(item);
               const qtyOnReceipt = Number(item.quantity);
               const poolSize = itemPoolSize(item);
               const poolLeft = Math.max(0, poolSize - totalClaimedQty(item));
               const multiWay = mode === "among_n" && splitN > 1;
-              const metaParts: string[] = [];
-              if (!isOnePerson) metaParts.push(hint);
-              if (multiWay) {
-                metaParts.push(
-                  `${poolLeft} of ${poolSize} share${poolSize === 1 ? "" : "s"} left`
-                );
-              } else if (itemHasMultiPool(item)) {
-                if (poolLeft > 0) {
-                  metaParts.push(`${poolLeft} of ${poolSize} left`);
-                } else if (myClaimQty(item, claimMemberId) > 0) {
-                  metaParts.push("Your pick");
-                } else if (qtyOnReceipt > 1) {
-                  metaParts.push(`${poolSize} on receipt`);
-                }
-              } else if (poolLeft < qtyOnReceipt && poolLeft > 0) {
-                metaParts.push(`${poolLeft} left`);
-              }
-              const myShare = wholeGroup
-                ? shareAmountFor(item, 1)
-                : on
-                  ? shareAmountFor(item, myQty)
-                  : shareAmountFor(item, 1);
-              const priceLabel = itemPickShareLabel(
-                mode,
-                item.split_n,
-                item.quantity,
-                on || wholeGroup
+              const myShare = shareAmountFor(
+                item,
+                wholeGroup ? 1 : on ? myQty : 1
               );
+              const priceLabel = wholeGroup
+                ? "Your share"
+                : itemPickShareLabel(
+                    mode,
+                    item.split_n,
+                    item.quantity,
+                    on
+                  );
               const otherPickers = formatItemPickers(item, claimMemberId);
+              const metaParts: string[] = [];
+              if (wholeGroup) {
+                metaParts.push(
+                  memberCount > 1
+                    ? `Split among ${memberCount} · ${money(myShare, currency)} each`
+                    : itemSplitModeLabel(mode, item.split_n, memberCount)
+                );
+              } else {
+                if (!isOnePerson) {
+                  metaParts.push(itemSplitModeLabel(mode, item.split_n, memberCount));
+                }
+                if (multiWay) {
+                  metaParts.push(
+                    `${poolLeft} of ${poolSize} share${poolSize === 1 ? "" : "s"} left`
+                  );
+                } else if (itemHasMultiPool(item)) {
+                  if (poolLeft > 0) {
+                    metaParts.push(`${poolLeft} of ${poolSize} left`);
+                  } else if (myClaimQty(item, claimMemberId) > 0) {
+                    metaParts.push("Your pick");
+                  } else if (qtyOnReceipt > 1) {
+                    metaParts.push(`${poolSize} on receipt`);
+                  }
+                } else if (poolLeft < qtyOnReceipt && poolLeft > 0) {
+                  metaParts.push(`${poolLeft} left`);
+                }
+              }
 
               return (
                 <div
@@ -624,12 +634,18 @@ export function GroupClaimGate({
                         <span
                           className={cn(
                             "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
-                            wholeGroup || on
-                              ? "border-primary bg-primary text-primary-foreground"
-                              : "border-border"
+                            wholeGroup
+                              ? "border-muted-foreground/40 bg-muted text-muted-foreground"
+                              : on
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border"
                           )}
                         >
-                          {wholeGroup || on ? <Check className="h-3.5 w-3.5" /> : null}
+                          {wholeGroup ? (
+                            <Users className="h-3.5 w-3.5" />
+                          ) : on ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : null}
                         </span>
                         <span className="truncate font-medium">{softName(item.name)}</span>
                       </span>
@@ -640,7 +656,7 @@ export function GroupClaimGate({
                         <span
                           className={cn(
                             "font-medium",
-                            on || wholeGroup ? "text-foreground" : "text-muted-foreground"
+                            wholeGroup || on ? "text-foreground" : "text-muted-foreground"
                           )}
                         >
                           {money(myShare, currency)}

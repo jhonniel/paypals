@@ -421,12 +421,18 @@ export function itemPickShareAmount(
   claimedQty: number
 ): number {
   const total = Number(itemTotal) || 0;
+  const q = Math.max(1, claimedQty);
+
+  if (mode === "among_group") {
+    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
+    return moneyNumber((total / n) * q);
+  }
+
   const perPerson = itemSplitPerPersonAmount(total, mode, splitN, groupSize);
   if (perPerson != null) {
-    return moneyNumber(perPerson * Math.max(1, claimedQty));
+    return moneyNumber(perPerson * q);
   }
   const qtyOnReceipt = Math.max(0.001, Number(quantity) || 1);
-  const q = Math.max(1, claimedQty);
   if (mode === "among_claimers" && qtyOnReceipt > 1) {
     return moneyNumber((total / qtyOnReceipt) * q);
   }
@@ -459,6 +465,11 @@ export function itemListDisplayShareAmount(
   claimerCount: number
 ): number {
   const total = Number(itemTotal) || 0;
+  if (mode === "among_group") {
+    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
+    return moneyNumber(total / n);
+  }
+
   const perPerson = itemSplitPerPersonAmount(total, mode, splitN, groupSize);
   if (perPerson != null) return perPerson;
 

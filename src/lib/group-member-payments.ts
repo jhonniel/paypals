@@ -325,7 +325,16 @@ export async function getGroupMemberPayments(
             asg?.share_quantity != null && asg.share_quantity > 0
               ? Number(asg.share_quantity)
               : 1;
-          const lineAmount = moneyNumber(line.amount);
+          const itemMeta = items.find((i) => i.id === line.itemId);
+          let lineAmount = moneyNumber(line.amount);
+          if (
+            itemMeta?.split_mode === "among_group" &&
+            memberIds.length > 0
+          ) {
+            lineAmount = moneyNumber(
+              Number(itemMeta.total_price) / memberIds.length
+            );
+          }
           const itemTotal = itemTotalById.get(line.itemId) ?? 0;
           const shareRatio =
             itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
@@ -336,7 +345,7 @@ export async function getGroupMemberPayments(
               : rawSubs;
           receiptItems.push({
             name: line.itemName,
-            quantity: qty,
+            quantity: itemMeta?.split_mode === "among_group" ? 1 : qty,
             amount: lineAmount,
             ...(subs.length ? { sub_items: subs } : {}),
           });
