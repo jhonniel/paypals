@@ -1,9 +1,10 @@
 "use client";
 
 import {
+  useRef,
   useState,
   type CSSProperties,
-  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -98,6 +99,12 @@ const faceStyle: CSSProperties = {
 function GroupFlipTile({ group }: { group: GroupRow }) {
   const [flipped, setFlipped] = useState(false);
   const [flareKey, setFlareKey] = useState(0);
+  const activeTap = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const lastBackTap = useRef(0);
 
   const owes = group.my_owes ?? 0;
   const currency = group.my_currency ?? "PHP";
@@ -115,10 +122,43 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
     setFlipped((value) => !value);
   }
 
-  function onFaceClick(event: ReactMouseEvent<HTMLDivElement>) {
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    activeTap.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }
+
+  function isTap(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = activeTap.current;
+    if (!start || start.pointerId !== event.pointerId) return false;
+    activeTap.current = null;
+    return (
+      Math.abs(event.clientX - start.x) <= 12 &&
+      Math.abs(event.clientY - start.y) <= 12
+    );
+  }
+
+  function onFrontPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isTap(event)) return;
     const target = event.target as HTMLElement;
     if (target.closest("a, button")) return;
     toggleFlip();
+  }
+
+  function onBackPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isTap(event)) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("a, button")) return;
+    const now = Date.now();
+    if (now - lastBackTap.current <= 320) {
+      lastBackTap.current = 0;
+      toggleFlip();
+      return;
+    }
+    lastBackTap.current = now;
   }
 
   const rotation = flipped ? 180 : 0;
@@ -132,11 +172,11 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
         className="tile-float relative h-full w-full"
         style={
           {
-            // Randomize rhythm per tile so they never float in sync
             animationDuration: `${4.2 + seededRandom(group.id, 1) * 3.6}s`,
             animationDelay: `-${(seededRandom(group.id, 2) * 8).toFixed(2)}s`,
             animationDirection:
               seededRandom(group.id, 3) > 0.5 ? "normal" : "reverse",
+            animationPlayState: flipped ? "paused" : "running",
           } as CSSProperties
         }
       >
@@ -156,7 +196,11 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
           role="button"
           tabIndex={flipped ? -1 : 0}
           aria-label={`${group.name} — tap to view items`}
-          onClick={onFaceClick}
+          onPointerDown={onPointerDown}
+          onPointerUp={onFrontPointerUp}
+          onPointerCancel={() => {
+            activeTap.current = null;
+          }}
           className="absolute inset-0 flex cursor-pointer flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border border-border bg-card p-2.5 text-center shadow-sm"
           style={{
             ...faceStyle,
@@ -207,11 +251,12 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
 
         {/* Back */}
         <div
-          role="button"
-          tabIndex={flipped ? 0 : -1}
-          aria-label={`${group.name} items — tap to flip back`}
-          onClick={onFaceClick}
-          className="absolute inset-0 flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-sm"
+          className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-sm"
+          onPointerDown={onPointerDown}
+          onPointerUp={onBackPointerUp}
+          onPointerCancel={() => {
+            activeTap.current = null;
+          }}
           style={{
             ...faceStyle,
             transform: "rotateY(180deg)",
@@ -220,7 +265,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
             touchAction: "manipulation",
           }}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{group.name}</p>
               <p className="text-[10px] text-muted-foreground">
@@ -265,7 +310,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                   No assigned items yet
                 </p>
                 <p className="mt-2 text-[10px] text-muted-foreground/80">
-                  Tap the card to flip back
+                  Double-tap to flip back
                 </p>
               </div>
             )}
