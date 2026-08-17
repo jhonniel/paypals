@@ -11,6 +11,7 @@ import {
   UserPlus,
   HandCoins,
   Upload,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import {
@@ -25,10 +26,11 @@ import { useMobileKeyboardOpen } from "@/hooks/use-mobile-keyboard";
 const items = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
   { href: "/receipts", label: "Receipts", icon: Receipt },
-  { href: "/receipts/new", label: "Scan", icon: Upload, primary: true },
   { href: "/groups", label: "Groups", icon: Users },
+  { href: "/receipts/new", label: "Scan", icon: Upload, primary: true },
   { href: "/pal-owes-me", label: "Owes me", icon: HandCoins },
   { href: "/friends", label: "Friends", icon: UserPlus },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function MobileBottomNav() {
