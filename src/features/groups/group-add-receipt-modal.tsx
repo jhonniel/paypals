@@ -1,16 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Loader2, Receipt, Search, Upload, X } from "lucide-react";
+import { Loader2, Paperclip, Receipt, Search, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { readApiJson } from "@/lib/api-client";
+import { uploadReceiptFiles } from "@/lib/upload-receipt-client";
 import { cn } from "@/utils/cn";
+
+const RECEIPT_ACCEPT =
+  "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
 
 type LinkableReceipt = {
   id: string;
@@ -44,9 +48,12 @@ export function GroupAddReceiptModal({
   onLinked: () => void | Promise<void>;
 }) {
   const [mounted, setMounted] = useState(false);
-  const [mode, setMode] = useState<"upload" | "existing">("upload");
+  const [mode, setMode] = useState<"upload" | "attach" | "existing">("upload");
   const [query, setQuery] = useState("");
   const [linkingId, setLinkingId] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachFiles, setAttachFiles] = useState<File[]>([]);
+  const attachInputRef = useRef<HTMLInputElement>(null);
 
   const searchQ = query.trim();
 
@@ -62,11 +69,45 @@ export function GroupAddReceiptModal({
       const res = await fetch(`/api/receipts?${params}`);
       const parsed = await readApiJson<{ data: LinkableReceipt[] }>(res);
       if (!parsed.ok) throw new Error(parsed.message);
-      return parsed.data.data ?? [];
+      return (parsed.data.data ?? []).filter(
+        (receipt) => receipt.group_id !== groupId
+      );
     },
   });
 
+  async function attachReceiptPhotos() {
+    if (!attachFiles.length) {
+      attachInputRef.current?.click();
+      return;
+    }
+    setAttaching(true);
+    try {
+      const { pageCount } = await uploadReceiptFiles({
+        files: attachFiles,
+        groupId,
+        skipOcr: true,
+      });
+      toast.success(
+        pageCount > 1
+          ? `Attached ${pageCount} pages to ${groupName}`
+          : `Receipt photo attached to ${groupName}`
+      );
+      setAttachFiles([]);
+      if (attachInputRef.current) attachInputRef.current.value = "";
+      await onLinked();
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not attach receipt");
+    } finally {
+      setAttaching(false);
+    }
+  }
+
   async function linkReceipt(receipt: LinkableReceipt) {
+    if (receipt.group_id === groupId) {
+      toast.message("This receipt is already on the group");
+      return;
+    }
     setLinkingId(receipt.id);
     try {
       const res = await fetch(`/api/receipts/${receipt.id}`, {
@@ -96,7 +137,7 @@ export function GroupAddReceiptModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !linkingId && !busy) onClose();
+      if (e.key === "Escape" && !linkingId && !busy && !attaching) onClose();
     };
     document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
@@ -106,12 +147,12 @@ export function GroupAddReceiptModal({
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, linkingId, busy]);
+  }, [onClose, linkingId, busy, attaching]);
 
   if (!mounted) return null;
 
   const receipts = data ?? [];
-  const isBusy = Boolean(busy || linkingId);
+  const isBusy = Boolean(busy || linkingId || attaching);
 
   return createPortal(
     <div
@@ -151,26 +192,36 @@ export function GroupAddReceiptModal({
             </Button>
           </div>
 
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <Button
               type="button"
               size="sm"
               variant={mode === "upload" ? "default" : "outline"}
-              className="flex-1"
+              className="min-w-0 px-2"
               onClick={() => setMode("upload")}
             >
-              <Upload className="h-3.5 w-3.5" />
-              Upload new
+              <Upload className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Scan</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "attach" ? "default" : "outline"}
+              className="min-w-0 px-2"
+              onClick={() => setMode("attach")}
+            >
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Attach</span>
             </Button>
             <Button
               type="button"
               size="sm"
               variant={mode === "existing" ? "default" : "outline"}
-              className="flex-1"
+              className="min-w-0 px-2"
               onClick={() => setMode("existing")}
             >
-              <Receipt className="h-3.5 w-3.5" />
-              Existing
+              <Receipt className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Existing</span>
             </Button>
           </div>
         </div>
@@ -182,18 +233,82 @@ export function GroupAddReceiptModal({
                 <Upload className="h-7 w-7" />
               </div>
               <div>
-                <p className="text-sm font-medium">Scan or upload a new receipt</p>
+                <p className="text-sm font-medium">Scan and extract line items</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Take a photo, pick from your library, or enter items manually. It will
-                  be linked to {groupName} automatically.
+                  OCR reads prices from the photo. Best when you want automatic item
+                  entry linked to {groupName}.
                 </p>
               </div>
               <Button asChild className="w-full">
                 <Link href={`/receipts/new?group=${groupId}`}>
                   <Upload className="h-4 w-4" />
-                  Go to upload
+                  Go to scan upload
                 </Link>
               </Button>
+            </div>
+          ) : mode === "attach" ? (
+            <div className="space-y-4 py-2">
+              <div className="text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                  <Paperclip className="h-7 w-7" />
+                </div>
+                <p className="mt-3 text-sm font-medium">Attach photo only</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Save the receipt image to the group without scanning. Add items
+                  manually or run OCR later from the receipt editor.
+                </p>
+              </div>
+              <input
+                ref={attachInputRef}
+                type="file"
+                accept={RECEIPT_ACCEPT}
+                multiple
+                className="hidden"
+                disabled={isBusy}
+                onChange={(e) => {
+                  const list = e.target.files;
+                  if (list?.length) setAttachFiles(Array.from(list));
+                }}
+              />
+              {attachFiles.length > 0 ? (
+                <ul className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                  {attachFiles.map((file) => (
+                    <li key={`${file.name}-${file.size}`} className="truncate py-0.5">
+                      {file.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  disabled={isBusy}
+                  onClick={() => attachInputRef.current?.click()}
+                >
+                  <Paperclip className="h-4 w-4" />
+                  {attachFiles.length > 0 ? "Change files" : "Choose photo(s)"}
+                </Button>
+                <Button
+                  type="button"
+                  className="flex-1"
+                  disabled={isBusy || attachFiles.length === 0}
+                  onClick={() => void attachReceiptPhotos()}
+                >
+                  {attaching ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Paperclip className="h-4 w-4" />
+                  )}
+                  Attach to group
+                </Button>
+              </div>
+              {attachFiles.length > 1 ? (
+                <p className="text-center text-xs text-muted-foreground">
+                  Multiple photos are saved as pages on one receipt.
+                </p>
+              ) : null}
             </div>
           ) : (
             <div className="space-y-3">

@@ -9,7 +9,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Users, Loader2, KeyRound, ArrowRight, RotateCw } from "lucide-react";
+import { Plus, Users, Loader2, KeyRound, ArrowRight, RotateCw, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,10 @@ import {
   GROUP_INVITE_CODE_LENGTH,
   normalizeGroupInviteCodeInput,
 } from "@/lib/group-invite-code";
+import { uploadReceiptFiles } from "@/lib/upload-receipt-client";
+
+const RECEIPT_ACCEPT =
+  "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
 
 type GroupRow = {
   id: string;
@@ -46,6 +50,7 @@ type GroupRow = {
       quantity: number;
       amount: number;
       sub_items?: ReceiptSubItem[];
+      group_split?: boolean;
     }>;
   }>;
 };
@@ -364,10 +369,15 @@ export function GroupsPageView() {
   const [description, setDescription] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [attachReceipt, setAttachReceipt] = useState(false);
+  const [receiptFiles, setReceiptFiles] = useState<File[]>([]);
+  const [attachProgress, setAttachProgress] = useState<string | null>(null);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
 
   async function createGroup(e: React.FormEvent) {
     e.preventDefault();
     setCreating(true);
+    setAttachProgress(null);
     try {
       const res = await fetch("/api/groups", {
         method: "POST",
@@ -376,19 +386,56 @@ export function GroupsPageView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message ?? "Create failed");
-      toast.success("Group created");
+
+      const groupId = json.data?.id as string | undefined;
+
+      if (groupId && attachReceipt && receiptFiles.length > 0) {
+        setAttachProgress(`Attaching receipt…`);
+        await uploadReceiptFiles({
+          files: receiptFiles,
+          groupId,
+          skipOcr: true,
+          onProgress: (current, total) => {
+            setAttachProgress(
+              total > 1
+                ? `Attaching page ${current} of ${total}…`
+                : "Attaching receipt…"
+            );
+          },
+        });
+      }
+
+      toast.success(
+        attachReceipt && receiptFiles.length > 0
+          ? "Group created with receipt attached"
+          : "Group created"
+      );
       setOpen(false);
       setName("");
       setDescription("");
+      setAttachReceipt(false);
+      setReceiptFiles([]);
       await qc.invalidateQueries({ queryKey: ["groups"] });
-      if (json.data?.id) {
-        router.push(`/groups/${json.data.id}`);
+      if (groupId) {
+        router.push(`/groups/${groupId}`);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Create failed");
     } finally {
       setCreating(false);
+      setAttachProgress(null);
     }
+  }
+
+  function onReceiptFilesSelected(list: FileList | null) {
+    if (!list?.length) return;
+    setReceiptFiles(Array.from(list));
+    setAttachReceipt(true);
+  }
+
+  function clearReceiptFiles() {
+    setReceiptFiles([]);
+    if (receiptInputRef.current) receiptInputRef.current.value = "";
   }
 
   async function joinByCode(e: React.FormEvent) {
@@ -497,14 +544,112 @@ export function GroupsPageView() {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Optional"
                   rows={2}
+                  disabled={creating}
                 />
               </div>
+
+              <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-3">
+                <div className="flex items-start gap-2">
+                  <input
+                    id="attach-receipt"
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-input"
+                    checked={attachReceipt}
+                    disabled={creating}
+                    onChange={(e) => {
+                      setAttachReceipt(e.target.checked);
+                      if (!e.target.checked) clearReceiptFiles();
+                    }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <Label htmlFor="attach-receipt" className="cursor-pointer font-medium">
+                      Attach receipt photo (optional)
+                    </Label>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Save the bill image to this group without scanning line items. You
+                      can add or scan items later from the group page.
+                    </p>
+                  </div>
+                </div>
+
+                {attachReceipt ? (
+                  <div className="space-y-2 pl-6">
+                    <input
+                      ref={receiptInputRef}
+                      type="file"
+                      accept={RECEIPT_ACCEPT}
+                      multiple
+                      className="hidden"
+                      disabled={creating}
+                      onChange={(e) => onReceiptFilesSelected(e.target.files)}
+                    />
+                    {receiptFiles.length > 0 ? (
+                      <ul className="space-y-1 text-xs text-muted-foreground">
+                        {receiptFiles.map((file) => (
+                          <li key={`${file.name}-${file.size}`} className="truncate">
+                            {file.name}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={creating}
+                        onClick={() => receiptInputRef.current?.click()}
+                      >
+                        <Paperclip className="h-3.5 w-3.5" />
+                        {receiptFiles.length > 0 ? "Change files" : "Choose photo(s)"}
+                      </Button>
+                      {receiptFiles.length > 0 ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={creating}
+                          onClick={clearReceiptFiles}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
+                    {receiptFiles.length > 1 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Multiple photos are combined into one receipt.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              {attachProgress ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {attachProgress}
+                </p>
+              ) : null}
+
               <div className="flex gap-2">
-                <Button type="submit" disabled={creating}>
+                <Button
+                  type="submit"
+                  disabled={creating}
+                >
                   {creating && <Loader2 className="animate-spin" />}
                   Create
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={creating}
+                  onClick={() => {
+                    setOpen(false);
+                    setAttachReceipt(false);
+                    clearReceiptFiles();
+                  }}
+                >
                   Cancel
                 </Button>
               </div>

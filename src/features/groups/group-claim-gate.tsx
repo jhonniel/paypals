@@ -472,6 +472,9 @@ export function GroupClaimGate({
   }, [availableItems, qtyForCurrent, memberCount]);
 
   const currency = current?.currency || "PHP";
+  const hasGroupSplitItems = availableItems.some(
+    (item) => (item.split_mode ?? "among_n") === "among_group"
+  );
   const selectedCount = availableItems.filter(
     (i) =>
       (qtyForCurrent[i.id] ?? 0) > 0 &&
@@ -545,6 +548,11 @@ export function GroupClaimGate({
           </CardTitle>
           <CardDescription>
             Uploaded by {current.uploaded_by} · {money(Number(current.total), currency)}
+            {hasGroupSplitItems ? (
+              <span className="mt-1 block text-violet-700 dark:text-violet-300">
+                Violet rows are split with the whole group — everyone pays a share.
+              </span>
+            ) : null}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 p-4 pt-0 sm:p-6 sm:pt-0">
@@ -615,7 +623,7 @@ export function GroupClaimGate({
                   className={cn(
                     "rounded-2xl border px-3 py-3 text-sm transition",
                     wholeGroup
-                      ? "border-border bg-muted/20 opacity-90"
+                      ? "border-violet-500/40 bg-violet-500/12 ring-1 ring-violet-500/20"
                       : on
                         ? "border-primary bg-primary/10"
                         : "border-border"
@@ -635,7 +643,7 @@ export function GroupClaimGate({
                           className={cn(
                             "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
                             wholeGroup
-                              ? "border-muted-foreground/40 bg-muted text-muted-foreground"
+                              ? "border-violet-500/50 bg-violet-500/20 text-violet-800 dark:text-violet-200"
                               : on
                                 ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border"
@@ -647,16 +655,34 @@ export function GroupClaimGate({
                             <Check className="h-3.5 w-3.5" />
                           ) : null}
                         </span>
-                        <span className="truncate font-medium">{softName(item.name)}</span>
+                        <span className="truncate font-medium">
+                          {wholeGroup ? (
+                            <span className="mr-1.5 inline-flex rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-800 dark:text-violet-200">
+                              Group split
+                            </span>
+                          ) : null}
+                          {softName(item.name)}
+                        </span>
                       </span>
                       <span className="shrink-0 text-right tabular-nums text-muted-foreground">
-                        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                        <span
+                          className={cn(
+                            "block text-[10px] uppercase tracking-wide",
+                            wholeGroup
+                              ? "text-violet-700/90 dark:text-violet-300/90"
+                              : "text-muted-foreground/80"
+                          )}
+                        >
                           {priceLabel}
                         </span>
                         <span
                           className={cn(
                             "font-medium",
-                            wholeGroup || on ? "text-foreground" : "text-muted-foreground"
+                            wholeGroup
+                              ? "text-violet-900 dark:text-violet-100"
+                              : on
+                                ? "text-foreground"
+                                : "text-muted-foreground"
                           )}
                         >
                           {money(myShare, currency)}
@@ -664,7 +690,14 @@ export function GroupClaimGate({
                       </span>
                     </span>
                     {metaParts.length > 0 && (
-                      <span className="pl-8 text-[11px] text-muted-foreground">
+                      <span
+                        className={cn(
+                          "pl-8 text-[11px]",
+                          wholeGroup
+                            ? "font-medium text-violet-800/90 dark:text-violet-200/90"
+                            : "text-muted-foreground"
+                        )}
+                      >
                         {metaParts.join(" · ")}
                       </span>
                     )}

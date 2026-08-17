@@ -153,6 +153,7 @@ type GroupDetail = {
       amount: number;
       merchant: string | null;
       sub_items?: ReceiptSubItem[];
+      group_split?: boolean;
     }>;
   }>;
   where_to_pay?: Array<{
@@ -490,9 +491,21 @@ function GroupReceiptCard({
                 Math.abs(displayPrice - Number(item.total_price)) > 0.01;
 
               return (
-                <li key={item.id} className="text-sm">
+                <li
+                  key={item.id}
+                  className={cn(
+                    "text-sm",
+                    isGroupSplit &&
+                      "rounded-xl border border-violet-500/30 bg-violet-500/10 px-2.5 py-2"
+                  )}
+                >
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2">
                     <span className="truncate font-medium">
+                      {isGroupSplit ? (
+                        <span className="mr-1.5 inline-flex rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-800 dark:text-violet-200">
+                          Group
+                        </span>
+                      ) : null}
                       {titleCaseItem(item.name)}
                     </span>
                     <span className="tabular-nums text-xs text-muted-foreground">

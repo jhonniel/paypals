@@ -28,7 +28,18 @@ export async function GET(request: Request) {
       .range(from, to);
 
     if (excludeGroup) {
-      query = query.or(`group_id.is.null,group_id.neq.${excludeGroup}`);
+      if (!z.string().uuid().safeParse(excludeGroup).success) {
+        return fail("Invalid excludeGroup id", 400);
+      }
+      const { data: linkedRows } = await supabase
+        .from("receipts")
+        .select("id")
+        .eq("created_by", user.id)
+        .eq("group_id", excludeGroup);
+      const linkedIds = (linkedRows ?? []).map((row) => row.id as string);
+      if (linkedIds.length > 0) {
+        query = query.not("id", "in", `(${linkedIds.join(",")})`);
+      }
     }
 
     if (q) {

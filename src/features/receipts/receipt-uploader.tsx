@@ -35,13 +35,18 @@ import {
 const ACCEPT =
   "image/png,image/jpeg,image/jpg,image/webp,image/heic,image/heif,application/pdf,.heic,.heif,.pdf";
 
-type SessionReceipt = {
-  id: string;
+type SessionPage = {
   fileName: string;
   previewUrl: string | null;
   itemCount: number;
   ocrFailed: boolean;
   warning?: string;
+};
+
+type SessionReceipt = {
+  id: string;
+  pages: SessionPage[];
+  totalItemCount: number;
 };
 
 export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
@@ -52,11 +57,19 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
   const streamRef = useRef<MediaStream | null>(null);
   const fileQueueRef = useRef<File[]>([]);
   const previewUrlRef = useRef<string | null>(null);
+  const scanBatchRef = useRef({ completed: 0, total: 0 });
+  const mergeBatchRef = useRef<{ receiptId: string | null; pagesLeft: number } | null>(
+    null
+  );
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
   const [linkGroupId, setLinkGroupId] = useState(groupId ?? "");
   const [liveCameraOpen, setLiveCameraOpen] = useState(false);
@@ -130,6 +143,27 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
     router.refresh();
   }
 
+  function startMergeBatch(count: number) {
+    if (count <= 1) return;
+    if (!mergeBatchRef.current) {
+      mergeBatchRef.current = { receiptId: null, pagesLeft: count };
+      return;
+    }
+    mergeBatchRef.current.pagesLeft += count;
+  }
+
+  function mergeAppendReceiptId(): string | null {
+    return mergeBatchRef.current?.receiptId ?? null;
+  }
+
+  function onMergedPageUploaded(receiptId: string) {
+    const batch = mergeBatchRef.current;
+    if (!batch) return;
+    if (!batch.receiptId) batch.receiptId = receiptId;
+    batch.pagesLeft -= 1;
+    if (batch.pagesLeft <= 0) mergeBatchRef.current = null;
+  }
+
   const sessionReceiptsRef = useRef<SessionReceipt[]>([]);
   useEffect(() => {
     sessionReceiptsRef.current = sessionReceipts;
@@ -196,6 +230,8 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         const form = new FormData();
         form.append("file", compressed);
         if (effectiveGroupId) form.append("group_id", effectiveGroupId);
+        const appendReceiptId = mergeAppendReceiptId();
+        if (appendReceiptId) form.append("receipt_id", appendReceiptId);
 
         const res = await fetch("/api/upload", {
           method: "POST",
@@ -205,8 +241,11 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           data: {
             id: string;
             itemCount?: number;
+            totalItemCount?: number;
+            pageCount?: number;
             warning?: string;
             ocrFailed?: boolean;
+            appended?: boolean;
           };
         }>(res);
 
@@ -221,11 +260,31 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
 
         const payload = parsed.data.data;
         const count = payload.itemCount ?? 0;
+        const totalItems = payload.totalItemCount ?? count;
+        const pageNum = scanBatchRef.current.completed + 1;
+        const isMergedBatch = Boolean(mergeBatchRef.current);
+        const page: SessionPage = {
+          fileName: file.name,
+          previewUrl: localPreview,
+          itemCount: count,
+          ocrFailed: Boolean(payload.ocrFailed),
+          warning: payload.warning,
+        };
 
-        setSessionReceipts((prev) => {
-          const receiptNum = prev.length + 1;
+        if (payload.appended) {
+          setSessionReceipts((prev) =>
+            prev.map((receipt) =>
+              receipt.id === payload.id
+                ? {
+                    ...receipt,
+                    pages: [...receipt.pages, page],
+                    totalItemCount: totalItems,
+                  }
+                : receipt
+            )
+          );
           if (payload.warning || payload.ocrFailed) {
-            toast.message(`Receipt ${receiptNum}: OCR could not read all items`, {
+            toast.message(`Page ${pageNum}: OCR could not read all items`, {
               description: String(
                 payload.warning ?? "Edit manually or tap Re-run OCR."
               ).slice(0, 160),
@@ -233,35 +292,89 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
           } else {
             toast.success(
               count
-                ? `Receipt ${receiptNum}: scanned ${count} item${count === 1 ? "" : "s"}`
-                : `Receipt ${receiptNum} uploaded — add items manually`
+                ? `Page ${pageNum}: scanned ${count} item${count === 1 ? "" : "s"}`
+                : `Page ${pageNum} uploaded — add items manually`
             );
           }
-          return [
-            ...prev,
-            {
-              id: payload.id,
-              fileName: file.name,
-              previewUrl: localPreview,
-              itemCount: count,
-              ocrFailed: Boolean(payload.ocrFailed),
-              warning: payload.warning,
-            },
-          ];
-        });
-        previewUrlRef.current = null;
-        setPreview(null);
-        setFileName(null);
-        setScanning(false);
+        } else {
+          setSessionReceipts((prev) => {
+            const receiptNum = prev.length + 1;
+            if (payload.warning || payload.ocrFailed) {
+              toast.message(
+                isMergedBatch
+                  ? `Page 1: OCR could not read all items`
+                  : `Receipt ${receiptNum}: OCR could not read all items`,
+                {
+                  description: String(
+                    payload.warning ?? "Edit manually or tap Re-run OCR."
+                  ).slice(0, 160),
+                }
+              );
+            } else {
+              toast.success(
+                isMergedBatch
+                  ? count
+                    ? `Page 1: scanned ${count} item${count === 1 ? "" : "s"}`
+                    : "Page 1 uploaded — add items manually"
+                  : count
+                    ? `Receipt ${receiptNum}: scanned ${count} item${count === 1 ? "" : "s"}`
+                    : `Receipt ${receiptNum} uploaded — add items manually`
+              );
+            }
+            return [
+              ...prev,
+              {
+                id: payload.id,
+                pages: [page],
+                totalItemCount: totalItems,
+              },
+            ];
+          });
+        }
+
+        onMergedPageUploaded(payload.id);
+        scanBatchRef.current.completed += 1;
+
         const next = fileQueueRef.current.shift();
-        if (next) void processFile(next);
+        if (next) {
+          if (scanBatchRef.current.total > 1) {
+            setScanProgress({
+              current: scanBatchRef.current.completed + 1,
+              total: scanBatchRef.current.total,
+            });
+          }
+          void processFile(next);
+        } else {
+          setScanning(false);
+          setUploading(false);
+          revokePreviewUrl(previewUrlRef.current);
+          previewUrlRef.current = null;
+          setPreview(null);
+          setFileName(null);
+          setScanProgress(null);
+          scanBatchRef.current = { completed: 0, total: 0 };
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Upload failed");
-        setScanning(false);
         const next = fileQueueRef.current.shift();
-        if (next) void processFile(next);
-      } finally {
-        setUploading(false);
+        if (next) {
+          if (scanBatchRef.current.total > 1) {
+            setScanProgress({
+              current: scanBatchRef.current.completed + 1,
+              total: scanBatchRef.current.total,
+            });
+          }
+          void processFile(next);
+        } else {
+          setScanning(false);
+          setUploading(false);
+          revokePreviewUrl(previewUrlRef.current);
+          previewUrlRef.current = null;
+          setPreview(null);
+          setFileName(null);
+          setScanProgress(null);
+          scanBatchRef.current = { completed: 0, total: 0 };
+        }
       }
     },
     [groupId, groupGate, effectiveGroupId]
@@ -273,15 +386,28 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
       if (!list.length) return;
       if (uploading || scanning) {
         fileQueueRef.current.push(...list);
+        startMergeBatch(list.length);
+        scanBatchRef.current.total += list.length;
+        if (scanBatchRef.current.total > 1) {
+          setScanProgress({
+            current: scanBatchRef.current.completed + 1,
+            total: scanBatchRef.current.total,
+          });
+        }
         toast.message(
           list.length === 1
             ? "Queued — will scan after the current receipt"
-            : `Queued ${list.length} receipts — scanning one at a time`
+            : `Queued ${list.length} pages — scanning into one receipt`
         );
         return;
       }
       const [first, ...rest] = list;
       fileQueueRef.current.push(...rest);
+      startMergeBatch(list.length);
+      scanBatchRef.current = { completed: 0, total: list.length };
+      setScanProgress(
+        list.length > 1 ? { current: 1, total: list.length } : null
+      );
       void processFile(first);
     },
     [processFile, uploading, scanning]
@@ -409,7 +535,9 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       revokePreviewUrl(previewUrlRef.current);
       for (const receipt of sessionReceiptsRef.current) {
-        revokePreviewUrl(receipt.previewUrl);
+        for (const page of receipt.pages) {
+          revokePreviewUrl(page.previewUrl);
+        }
       }
     };
   }, []);
@@ -454,9 +582,10 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
             <div className="min-w-0">
               <p className="text-sm font-semibold">This transaction</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {sessionReceipts.length} receipt
-                {sessionReceipts.length === 1 ? "" : "s"} scanned — add more if you
-                have separate receipts or one didn&apos;t fit in the camera frame.
+                {sessionReceipts.length === 1 &&
+                sessionReceipts[0].pages.length > 1
+                  ? `${sessionReceipts[0].pages.length} pages scanned into one receipt — add another only if this is a separate bill.`
+                  : `${sessionReceipts.length} receipt${sessionReceipts.length === 1 ? "" : "s"} scanned — add another only for a separate bill.`}
               </p>
             </div>
             <Button
@@ -470,42 +599,69 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
             </Button>
           </div>
           <ul className="space-y-2">
-            {sessionReceipts.map((receipt, index) => (
+            {sessionReceipts.map((receipt, index) => {
+              const firstPage = receipt.pages[0];
+              const multiPage = receipt.pages.length > 1;
+              return (
               <li
                 key={receipt.id}
-                className="flex items-center gap-3 rounded-xl border border-border/80 bg-background/60 px-3 py-2.5"
+                className="rounded-xl border border-border/80 bg-background/60 px-3 py-2.5"
               >
-                <div className="flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
-                  {receipt.previewUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={receipt.previewUrl}
-                      alt=""
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  ) : (
-                    <FileImage className="h-4 w-4 text-muted-foreground" />
-                  )}
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
+                    {firstPage?.previewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={firstPage.previewUrl}
+                        alt=""
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <FileImage className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 text-sm font-medium">
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      {multiPage
+                        ? `Receipt · ${receipt.pages.length} pages`
+                        : `Receipt ${index + 1}`}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {receipt.totalItemCount > 0
+                        ? `${receipt.totalItemCount} item${receipt.totalItemCount === 1 ? "" : "s"} total`
+                        : "Add items manually"}
+                      {receipt.pages.some((page) => page.ocrFailed)
+                        ? " · OCR partial"
+                        : ""}
+                    </p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" asChild>
+                    <Link href={`/receipts/${receipt.id}`}>Edit</Link>
+                  </Button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-1.5 text-sm font-medium">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                    Receipt {index + 1}
+                {multiPage ? (
+                  <ul className="mt-2 space-y-1 border-t border-border/60 pt-2">
+                    {receipt.pages.map((page, pageIndex) => (
+                      <li
+                        key={`${receipt.id}-${pageIndex}`}
+                        className="truncate text-xs text-muted-foreground"
+                      >
+                        Page {pageIndex + 1}: {page.fileName}
+                        {page.itemCount > 0
+                          ? ` · ${page.itemCount} item${page.itemCount === 1 ? "" : "s"}`
+                          : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : firstPage ? (
+                  <p className="mt-1 truncate pl-[3.25rem] text-xs text-muted-foreground">
+                    {firstPage.fileName}
                   </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {receipt.itemCount > 0
-                      ? `${receipt.itemCount} item${receipt.itemCount === 1 ? "" : "s"} scanned`
-                      : "Add items manually"}
-                    {receipt.ocrFailed ? " · OCR partial" : ""}
-                    {" · "}
-                    {receipt.fileName}
-                  </p>
-                </div>
-                <Button type="button" variant="outline" size="sm" className="shrink-0" asChild>
-                  <Link href={`/receipts/${receipt.id}`}>Edit</Link>
-                </Button>
+                ) : null}
               </li>
-            ))}
+            );
+            })}
           </ul>
         </div>
       )}
@@ -541,7 +697,16 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
             : "border-border bg-muted/20 hover:border-primary/40"
         )}
       >
-        <ReceiptScanOverlay active={scanning} previewUrl={preview} />
+        <ReceiptScanOverlay
+          active={scanning}
+          previewUrl={preview}
+          subtitle={
+            scanProgress
+              ? `Page ${scanProgress.current} of ${scanProgress.total}`
+              : null
+          }
+          scanKey={fileName ?? scanProgress?.current}
+        />
 
         <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
           <Upload className="h-6 w-6" />
@@ -551,8 +716,8 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         </h2>
         <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
           {inSession
-            ? "Each photo is scanned separately. Upload or capture the next receipt, then tap Done when finished."
-            : "PNG, JPG, WEBP, HEIC, or PDF. Multiple receipts in one transaction? Scan them one at a time — paste with ⌘V / Ctrl+V."}
+            ? "Upload another photo only if it is a separate bill. Each new upload creates its own receipt."
+            : "PNG, JPG, WEBP, HEIC, or PDF. Select multiple files at once to combine pages into one receipt — paste with ⌘V / Ctrl+V."}
         </p>
 
         <div className="mt-8 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-center">

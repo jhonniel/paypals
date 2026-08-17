@@ -17,12 +17,18 @@ export function ReceiptScanOverlay({
   previewUrl,
   className,
   compact = false,
+  subtitle,
+  scanKey,
 }: {
   active: boolean;
   previewUrl?: string | null;
   className?: string;
   /** Smaller layout for card thumbnails */
   compact?: boolean;
+  /** e.g. "Receipt 2 of 5" during batch uploads */
+  subtitle?: string | null;
+  /** Changes when a new file starts scanning — resets step progress */
+  scanKey?: string | number | null;
 }) {
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -31,11 +37,17 @@ export function ReceiptScanOverlay({
       setStepIndex(0);
       return;
     }
+    setStepIndex(0);
     const id = window.setInterval(() => {
-      setStepIndex((i) => (i + 1) % SCAN_STEPS.length);
-    }, 1600);
+      setStepIndex((i) => Math.min(i + 1, SCAN_STEPS.length - 1));
+    }, 2000);
     return () => window.clearInterval(id);
-  }, [active]);
+  }, [active, scanKey]);
+
+  const progressPct = Math.min(
+    8 + ((stepIndex + 1) / SCAN_STEPS.length) * 85,
+    93
+  );
 
   return (
     <AnimatePresence>
@@ -101,6 +113,16 @@ export function ReceiptScanOverlay({
             >
               Scanning receipt
             </p>
+            {subtitle ? (
+              <p
+                className={cn(
+                  "mt-0.5 text-muted-foreground",
+                  compact ? "text-[10px]" : "text-xs"
+                )}
+              >
+                {subtitle}
+              </p>
+            ) : null}
             <AnimatePresence mode="wait">
               <motion.p
                 key={SCAN_STEPS[stepIndex]}
@@ -125,9 +147,9 @@ export function ReceiptScanOverlay({
             >
               <motion.div
                 className="h-full rounded-full bg-primary"
-                initial={{ width: "12%" }}
-                animate={{ width: ["12%", "88%", "28%", "96%", "40%"] }}
-                transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+                initial={false}
+                animate={{ width: `${progressPct}%` }}
+                transition={{ duration: 0.45, ease: "easeOut" }}
               />
             </div>
           </div>

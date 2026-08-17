@@ -18,6 +18,7 @@ export type MemberPaymentItem = {
   quantity: number;
   amount: number;
   sub_items?: ReceiptSubItem[];
+  group_split?: boolean;
 };
 
 export type MemberPaymentReceipt = {
@@ -347,6 +348,7 @@ export async function getGroupMemberPayments(
             name: line.itemName,
             quantity: itemMeta?.split_mode === "among_group" ? 1 : qty,
             amount: lineAmount,
+            ...(itemMeta?.split_mode === "among_group" ? { group_split: true } : {}),
             ...(subs.length ? { sub_items: subs } : {}),
           });
         }

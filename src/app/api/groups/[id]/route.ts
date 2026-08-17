@@ -325,6 +325,7 @@ export async function GET(req: Request, { params }: Params) {
           amount: number;
           merchant: string | null;
           sub_items?: ReturnType<typeof normalizeSubItems>;
+          group_split?: boolean;
         }>;
       }
     >();
@@ -442,6 +443,10 @@ export async function GET(req: Request, { params }: Params) {
                 : qty,
             amount: lineAmount,
             merchant: r.merchant,
+            ...((itemMeta as { split_mode?: string } | undefined)?.split_mode ===
+            "among_group"
+              ? { group_split: true }
+              : {}),
             ...(scaledSubs.length ? { sub_items: scaledSubs } : {}),
           });
         }

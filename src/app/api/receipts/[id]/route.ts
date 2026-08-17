@@ -165,6 +165,9 @@ export async function PATCH(request: Request, { params }: Params) {
     }
 
     if (fields.group_id) {
+      if (existing.group_id === fields.group_id) {
+        return fail("Receipt is already linked to this group", 400);
+      }
       const { data: group } = await supabase
         .from("groups")
         .select("id, created_by")

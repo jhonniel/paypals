@@ -13,7 +13,8 @@ type InsertItem = {
 export async function insertReceiptItems(
   supabase: SupabaseClient,
   receiptId: string,
-  items: InsertItem[]
+  items: InsertItem[],
+  startSortOrder = 0
 ): Promise<{ error: string | null }> {
   if (!items.length) return { error: null };
 
@@ -23,7 +24,7 @@ export async function insertReceiptItems(
     quantity: item.quantity,
     unit_price: item.unitPrice,
     total_price: item.totalPrice,
-    sort_order: index,
+    sort_order: startSortOrder + index,
     sub_items: normalizeSubItems(item.subItems ?? []),
   }));
 
@@ -38,7 +39,7 @@ export async function insertReceiptItems(
         quantity: item.quantity,
         unit_price: item.unitPrice,
         total_price: item.totalPrice,
-        sort_order: index,
+        sort_order: startSortOrder + index,
       }))
     );
     return { error: error?.message ?? null };

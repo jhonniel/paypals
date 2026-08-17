@@ -16,6 +16,8 @@ export type BreakdownItem = {
   quantity?: number;
   amount: number;
   sub_items?: ReceiptSubItem[];
+  /** Split equally among the whole group — show highlighted row */
+  group_split?: boolean;
 };
 
 function SubItems({
@@ -106,7 +108,14 @@ export function ItemBreakdownList({
         {items.map((item, idx) => {
           const subs = item.sub_items ?? [];
           return (
-            <li key={`${item.name}-${idx}`} className="min-w-0">
+            <li
+              key={`${item.name}-${idx}`}
+              className={cn(
+                "min-w-0",
+                item.group_split &&
+                  "rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1.5"
+              )}
+            >
               <div
                 className={cn(
                   "flex items-baseline justify-between gap-2",
@@ -114,8 +123,15 @@ export function ItemBreakdownList({
                 )}
               >
                 <span className="min-w-0 font-medium leading-snug text-foreground/90">
+                  {item.group_split ? (
+                    <span className="mr-1.5 inline-flex rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-violet-800 dark:text-violet-200">
+                      Group
+                    </span>
+                  ) : null}
                   {label(item.name)}
-                  {(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}
+                  {!item.group_split && (item.quantity ?? 1) > 1
+                    ? ` ×${item.quantity}`
+                    : ""}
                 </span>
                 <span className="shrink-0 tabular-nums font-medium text-foreground">
                   {money(item.amount, currency)}
