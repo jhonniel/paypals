@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Loader2, Paperclip, Receipt, Search, Upload, X } from "lucide-react";
+import { Loader2, Paperclip, PenLine, Receipt, Search, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,12 +49,14 @@ export function GroupAddReceiptModal({
   onLinked: () => void | Promise<void>;
 }) {
   const [mounted, setMounted] = useState(false);
-  const [mode, setMode] = useState<"upload" | "attach" | "existing">("upload");
+  const [mode, setMode] = useState<"upload" | "attach" | "manual" | "existing">("upload");
   const [query, setQuery] = useState("");
   const [linkingId, setLinkingId] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
+  const [creatingManual, setCreatingManual] = useState(false);
   const [attachFiles, setAttachFiles] = useState<File[]>([]);
   const attachInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   const searchQ = query.trim();
 
@@ -74,6 +77,31 @@ export function GroupAddReceiptModal({
       );
     },
   });
+
+  async function createManualReceipt() {
+    setCreatingManual(true);
+    try {
+      const res = await fetch("/api/receipts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          merchant: null,
+          group_id: groupId,
+          items: [],
+        }),
+      });
+      const parsed = await readApiJson<{ data: { id: string } }>(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      toast.success("Add your items, then save");
+      await onLinked();
+      onClose();
+      router.push(`/receipts/${parsed.data.data.id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create receipt");
+    } finally {
+      setCreatingManual(false);
+    }
+  }
 
   async function attachReceiptPhotos() {
     if (!attachFiles.length) {
@@ -137,7 +165,7 @@ export function GroupAddReceiptModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !linkingId && !busy && !attaching) onClose();
+      if (e.key === "Escape" && !linkingId && !busy && !attaching && !creatingManual) onClose();
     };
     document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
@@ -147,12 +175,12 @@ export function GroupAddReceiptModal({
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, linkingId, busy, attaching]);
+  }, [onClose, linkingId, busy, attaching, creatingManual]);
 
   if (!mounted) return null;
 
   const receipts = data ?? [];
-  const isBusy = Boolean(busy || linkingId || attaching);
+  const isBusy = Boolean(busy || linkingId || attaching || creatingManual);
 
   return createPortal(
     <div
@@ -176,7 +204,7 @@ export function GroupAddReceiptModal({
                 Add receipt
               </h2>
               <p className="text-xs text-muted-foreground">
-                Upload a new one or pick from your existing receipts
+                Scan, attach a photo, enter items manually, or pick existing
               </p>
             </div>
             <Button
@@ -192,7 +220,7 @@ export function GroupAddReceiptModal({
             </Button>
           </div>
 
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Button
               type="button"
               size="sm"
@@ -212,6 +240,16 @@ export function GroupAddReceiptModal({
             >
               <Paperclip className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">Attach</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "manual" ? "default" : "outline"}
+              className="min-w-0 px-2"
+              onClick={() => setMode("manual")}
+            >
+              <PenLine className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Manual</span>
             </Button>
             <Button
               type="button"
@@ -309,6 +347,32 @@ export function GroupAddReceiptModal({
                   Multiple photos are saved as pages on one receipt.
                 </p>
               ) : null}
+            </div>
+          ) : mode === "manual" ? (
+            <div className="space-y-4 py-2 text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+                <PenLine className="h-7 w-7" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Enter items manually</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  No photo needed — type line items and prices yourself. The receipt
+                  is linked to {groupName} for members to claim.
+                </p>
+              </div>
+              <Button
+                type="button"
+                className="w-full"
+                disabled={isBusy}
+                onClick={() => void createManualReceipt()}
+              >
+                {creatingManual ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <PenLine className="h-4 w-4" />
+                )}
+                Create &amp; add items
+              </Button>
             </div>
           ) : (
             <div className="space-y-3">

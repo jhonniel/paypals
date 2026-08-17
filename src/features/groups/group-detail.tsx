@@ -1258,7 +1258,7 @@ export function GroupDetailView({
                   </span>
                 </>
               ) : isCreator ? (
-                "Upload receipts for the group — members tap what they ordered"
+                "Upload or enter receipts manually — members tap what they ordered"
               ) : (
                 "Open a receipt and tap what you got"
               )}
@@ -1282,7 +1282,7 @@ export function GroupDetailView({
             <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">
                 {isCreator
-                  ? "No receipts yet. Upload one so members can pick what they got."
+                  ? "No receipts yet. Scan, attach a photo, or enter items manually."
                   : "No receipts yet. Only the group creator can upload — check back soon."}
               </p>
               {isCreator && (
