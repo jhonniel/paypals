@@ -52,7 +52,7 @@ export async function GET(request: Request) {
       ...new Set((myMemberships.data ?? []).map((m) => m.group_id)),
     ];
 
-    let guestHits: SearchPersonHit[] = [];
+    const guestHits: SearchPersonHit[] = [];
     if (groupIds.length) {
       const guestFilter = `guest_name.ilike."${pattern}",guest_email.ilike."${pattern}"`;
       const { data: guestMembers, error: guestError } = await supabase

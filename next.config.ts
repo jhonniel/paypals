@@ -37,6 +37,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
   reactStrictMode: true,
+  serverExternalPackages: ["heic-convert", "sharp"],
   images: {
     formats: ["image/avif", "image/webp"],
     remotePatterns: [
