@@ -2,9 +2,6 @@
 
 import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Megaphone } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { ConfirmModal } from "@/components/confirm-modal";
 import { AnnouncementReader } from "@/features/announcements/announcement-reader";
 import { useDeferredReady } from "@/hooks/use-deferred-ready";
 
@@ -17,10 +14,9 @@ type PendingAnnouncement = {
   created_at: string;
 };
 
-/** Shows undismissed admin announcements as a global modal. */
+/** Shows undismissed admin announcements as a global modal with the full article. */
 export function AnnouncementGate({ userId }: { userId: string | null }) {
   const qc = useQueryClient();
-  const [readerId, setReaderId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const deferredReady = useDeferredReady(800);
 
@@ -58,62 +54,29 @@ export function AnnouncementGate({ userId }: { userId: string | null }) {
     await dismiss(current.id);
   }
 
-  async function readFullArticle() {
-    if (!current) return;
-    const id = current.id;
-    await dismiss(id);
-    setReaderId(id);
-  }
-
-  if (!userId || !current) {
-    return readerId ? (
-      <AnnouncementReader
-        announcementId={readerId}
-        onClose={() => setReaderId(null)}
-      />
-    ) : null;
-  }
+  if (!userId || !current) return null;
 
   return (
-    <>
-      <ConfirmModal
-        title={current.title}
-        description={
-          current.published_at
-            ? `Posted ${formatDistanceToNow(new Date(current.published_at), { addSuffix: true })}`
-            : "Announcement from Paypals"
-        }
-        highlight={
-          <div className="space-y-3 text-left">
-            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Megaphone className="h-5 w-5" />
-            </div>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {current.summary}
-            </p>
-          </div>
-        }
-        cancelLabel="Close"
-        confirmLabel="Read full article"
-        onClose={() => void closeModal()}
-        onConfirm={() => void readFullArticle()}
-        busy={busy}
-      />
-
-      {readerId ? (
-        <AnnouncementReader
-          announcementId={readerId}
-          onClose={() => setReaderId(null)}
-          onOpened={() => {
-            void fetch("/api/notifications", {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ link: `/announcements/${readerId}` }),
-            });
-            void qc.invalidateQueries({ queryKey: ["notifications"] });
-          }}
-        />
-      ) : null}
-    </>
+    <AnnouncementReader
+      announcementId={current.id}
+      article={{
+        id: current.id,
+        title: current.title,
+        summary: current.summary,
+        body: current.body,
+        published_at: current.published_at,
+        created_at: current.created_at,
+      }}
+      busy={busy}
+      onClose={() => void closeModal()}
+      onOpened={() => {
+        void fetch("/api/notifications", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ link: `/announcements/${current.id}` }),
+        });
+        void qc.invalidateQueries({ queryKey: ["notifications"] });
+      }}
+    />
   );
 }

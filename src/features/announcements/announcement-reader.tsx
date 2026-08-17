@@ -19,19 +19,24 @@ export type AnnouncementArticle = {
 
 type AnnouncementReaderProps = {
   announcementId: string;
+  /** Skip fetch when article data is already available (e.g. pending popup). */
+  article?: AnnouncementArticle | null;
   onClose: () => void;
   /** Called after the article is shown (e.g. mark notification read). */
   onOpened?: () => void;
+  busy?: boolean;
 };
 
 export function AnnouncementReader({
   announcementId,
+  article: preloaded,
   onClose,
   onOpened,
+  busy = false,
 }: AnnouncementReaderProps) {
   const [mounted, setMounted] = useState(false);
 
-  const { data, isLoading, error } = useQuery({
+  const { data: fetched, isLoading, error } = useQuery({
     queryKey: ["announcement", announcementId],
     queryFn: async () => {
       const res = await fetch(`/api/announcements/${announcementId}`);
@@ -39,7 +44,10 @@ export function AnnouncementReader({
       if (!res.ok) throw new Error(json?.error?.message ?? "Failed to load");
       return json.data as AnnouncementArticle;
     },
+    enabled: !preloaded,
   });
+
+  const data = preloaded ?? fetched;
 
   useEffect(() => {
     setMounted(true);
@@ -51,7 +59,7 @@ export function AnnouncementReader({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !busy) onClose();
     };
     const html = document.documentElement;
     const body = document.body;
@@ -65,27 +73,34 @@ export function AnnouncementReader({
       body.style.overflow = prevBody;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, [onClose, busy]);
 
   if (!mounted) return null;
+
+  const summary =
+    data?.summary?.trim() &&
+    data.summary.trim().toLowerCase() !== data.body.trim().toLowerCase()
+      ? data.summary.trim()
+      : null;
 
   return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="announcement-reader-title"
-      className="fixed inset-0 z-[110] flex items-end justify-center p-0 sm:items-center sm:p-4"
+      className="fixed inset-0 z-[200] flex items-end justify-center p-0 sm:items-center sm:p-4"
     >
       <button
         type="button"
         className="absolute inset-0 bg-black/65 backdrop-blur-sm"
         aria-label="Close announcement"
+        disabled={busy}
         onClick={onClose}
       />
       <div
         className={cn(
           "relative z-[1] flex max-h-[min(92dvh,40rem)] w-full flex-col overflow-hidden",
-          "rounded-t-2xl border border-border bg-background shadow-2xl sm:max-w-lg sm:rounded-2xl"
+          "rounded-t-2xl border border-border bg-background shadow-2xl sm:max-w-xl sm:rounded-2xl"
         )}
         style={{ marginBottom: "max(0px, env(safe-area-inset-bottom))" }}
       >
@@ -94,12 +109,12 @@ export function AnnouncementReader({
             <Megaphone className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
-            {isLoading ? (
+            {!preloaded && isLoading ? (
               <div className="flex items-center gap-2 py-1">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Loading…</span>
               </div>
-            ) : error ? (
+            ) : error && !data ? (
               <p className="text-sm text-destructive">
                 {error instanceof Error ? error.message : "Could not load announcement"}
               </p>
@@ -122,6 +137,7 @@ export function AnnouncementReader({
             variant="ghost"
             className="h-10 w-10 shrink-0"
             aria-label="Close"
+            disabled={busy}
             onClick={onClose}
           >
             <X className="h-5 w-5" />
@@ -130,15 +146,22 @@ export function AnnouncementReader({
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
           {data ? (
-            <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-              {data.body}
+            <div className="space-y-3">
+              {summary ? (
+                <p className="text-sm font-medium leading-relaxed text-foreground">
+                  {summary}
+                </p>
+              ) : null}
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                {data.body}
+              </div>
             </div>
           ) : null}
         </div>
 
         <div className="border-t border-border px-4 py-3">
-          <Button type="button" className="w-full" onClick={onClose}>
-            Done
+          <Button type="button" className="w-full" disabled={busy} onClick={onClose}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Got it"}
           </Button>
         </div>
       </div>

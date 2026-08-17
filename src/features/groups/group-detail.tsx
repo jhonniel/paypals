@@ -2405,8 +2405,8 @@ function InviteMembersModal({
                     Add member
                   </Button>
                   <p className="text-xs text-muted-foreground">
-                    When they join with the group link, they pick this name, then
-                    pick what they ordered.
+                    When they join with the group link, they can pick this name if it
+                    matches — or skip and join without picking.
                   </p>
                 </form>
               </>

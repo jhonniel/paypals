@@ -48,19 +48,21 @@ export function InviteJoinView({ code }: { code: string }) {
         description: string | null;
         member_count: number;
         open_seats?: unknown;
-        must_pick_name?: boolean;
+        has_open_seats?: boolean;
       };
       return {
         ...payload,
         open_seats: normalizeSeats(payload.open_seats),
-        must_pick_name: Boolean(payload.must_pick_name),
+        has_open_seats:
+          Boolean(payload.has_open_seats) ||
+          normalizeSeats(payload.open_seats).length > 0,
       };
     },
     retry: false,
   });
 
   const openSeats = forcedSeats ?? data?.open_seats ?? [];
-  const mustPickName = openSeats.length > 0 || Boolean(data?.must_pick_name);
+  const hasOpenSeats = openSeats.length > 0 || Boolean(data?.has_open_seats);
   const afterSignup = `/signup?next=${encodeURIComponent(`/invite/${code}`)}`;
 
   useEffect(() => {
@@ -85,17 +87,6 @@ export function InviteJoinView({ code }: { code: string }) {
         return;
       }
       if (!res.ok) {
-        if (json?.error?.code === "PICK_SEAT") {
-          const seats = normalizeSeats(json?.error?.details?.open_seats);
-          if (seats.length > 0) {
-            setForcedSeats(seats);
-            toast.error("Pick your name on the list first");
-            return;
-          }
-          toast.error("Pick your name on the bill to join");
-          await refetch();
-          return;
-        }
         throw new Error(json?.error?.message ?? "Join failed");
       }
       const groupId = json.data?.group_id as string | undefined;
@@ -107,6 +98,7 @@ export function InviteJoinView({ code }: { code: string }) {
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Join failed");
+      await refetch();
     } finally {
       setJoining(false);
     }
@@ -126,8 +118,8 @@ export function InviteJoinView({ code }: { code: string }) {
         <CardHeader className="text-center">
           <CardTitle>Sign in to join</CardTitle>
           <CardDescription>
-            Create an account with an admin signup invite, then come back to pick your
-            name on this group.
+            Create an account with an admin signup invite, then come back to join this
+            group.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
@@ -167,21 +159,20 @@ export function InviteJoinView({ code }: { code: string }) {
         </div>
         <CardTitle>{data.name}</CardTitle>
         <CardDescription>
-          {mustPickName
-            ? "Pick your name on the bill, then you’ll choose what you ordered."
+          {hasOpenSeats
+            ? "If your name is on the list, tap it. Otherwise you can skip and join."
             : data.description || "You've been invited to split bills on Paypals."}
           {data.member_count != null ? ` · ${data.member_count} members` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {mustPickName ? (
+        {hasOpenSeats ? (
           <>
             <div className="space-y-2">
-              <p className="text-sm font-medium">Who are you?</p>
+              <p className="text-sm font-medium">Names on the bill (optional)</p>
               {openSeats.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Loading names… If nothing appears, ask the owner to add your name,
-                  then refresh.
+                  Loading names… If nothing appears, you can still join below.
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -191,7 +182,11 @@ export function InviteJoinView({ code }: { code: string }) {
                       <li key={seat.member_id}>
                         <button
                           type="button"
-                          onClick={() => setSelectedSeatId(seat.member_id)}
+                          onClick={() =>
+                            setSelectedSeatId((cur) =>
+                              cur === seat.member_id ? null : seat.member_id
+                            )
+                          }
                           className={cn(
                             "flex w-full items-center rounded-xl border px-3 py-3 text-left text-sm font-medium transition",
                             selected
@@ -211,7 +206,7 @@ export function InviteJoinView({ code }: { code: string }) {
               className="w-full"
               onClick={() => {
                 if (!selectedSeatId) {
-                  toast.error("Pick your name first");
+                  toast.error("Pick your name, or use Skip below");
                   return;
                 }
                 void join(selectedSeatId);
@@ -219,11 +214,20 @@ export function InviteJoinView({ code }: { code: string }) {
               disabled={joining || !selectedSeatId}
             >
               {joining && <Loader2 className="animate-spin" />}
-              That’s me — join
+              That&apos;s me — join
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              Ask the owner to add your name if it isn’t listed.
-            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => void join()}
+              disabled={joining}
+            >
+              {joining && !selectedSeatId ? (
+                <Loader2 className="animate-spin" />
+              ) : null}
+              Skip — my name isn&apos;t listed
+            </Button>
           </>
         ) : (
           <Button className="w-full" onClick={() => void join()} disabled={joining}>

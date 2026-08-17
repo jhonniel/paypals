@@ -108,7 +108,8 @@ export async function GET(request: Request) {
     return ok({
       ...row,
       open_seats: openSeats,
-      must_pick_name: openSeats.length > 0,
+      has_open_seats: openSeats.length > 0,
+      must_pick_name: false,
       seats_source: source,
       ...(seatsError && openSeats.length === 0 ? { seats_warning: seatsError } : {}),
     });
@@ -129,7 +130,6 @@ export async function POST(request: Request) {
     if (!parsed.success) return fromZod(parsed.error);
 
     const { code, member_id } = parsed.data;
-    const { seats: openSeats } = await loadOpenSeats(supabase, code);
 
     let groupId: string | null = null;
 
@@ -208,23 +208,15 @@ export async function POST(request: Request) {
         groupId = data as string;
       }
     } else {
-      if (openSeats.length > 0) {
-        return fail("Pick your name on the bill to join this group.", 400, "PICK_SEAT", {
-          open_seats: openSeats,
-          must_pick_name: true,
-        });
-      }
-
       const { data, error } = await supabase.rpc("join_group_by_invite", {
         p_code: code,
       });
       if (error) {
         if (/PICK_SEAT/i.test(error.message)) {
-          const again = await loadOpenSeats(supabase, code);
-          return fail("Pick your name on the bill to join this group.", 400, "PICK_SEAT", {
-            open_seats: again.seats,
-            must_pick_name: true,
-          });
+          return fail(
+            "Pick-name join needs migration 028_optional_pick_name_on_join.sql in Supabase.",
+            400
+          );
         }
         return fail(error.message, 400);
       }
