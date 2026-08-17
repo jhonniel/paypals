@@ -1,11 +1,9 @@
 "use client";
 
 import {
-  useRef,
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -99,19 +97,7 @@ const faceStyle: CSSProperties = {
 
 function GroupFlipTile({ group }: { group: GroupRow }) {
   const [flipped, setFlipped] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const [rotation, setRotation] = useState(0);
   const [flareKey, setFlareKey] = useState(0);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startRotation: number;
-    width: number;
-    moved: boolean;
-  } | null>(null);
-  const suppressTapRef = useRef(false);
-  const lastBackTapRef = useRef(0);
-  const handledDoubleTapRef = useRef(false);
 
   const owes = group.my_owes ?? 0;
   const currency = group.my_currency ?? "PHP";
@@ -124,107 +110,18 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
     0
   );
 
-  function snapTo(nextRotation: number) {
-    const turn = Math.round(nextRotation / 180);
-    const nextFlipped = Math.abs(turn) % 2 === 1;
-    if (nextFlipped !== flipped) setFlareKey((k) => k + 1);
-    setFlipped(nextFlipped);
-    setRotation(turn * 180);
-    if (!nextFlipped) lastBackTapRef.current = 0;
+  function toggleFlip() {
+    setFlareKey((k) => k + 1);
+    setFlipped((value) => !value);
   }
 
-  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
+  function onFaceClick(event: ReactMouseEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    // Let links / footer Open control work normally.
     if (target.closest("a, button")) return;
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startRotation: rotation,
-      width: Math.max(event.currentTarget.getBoundingClientRect().width, 1),
-      moved: false,
-    };
-    setDragging(true);
+    toggleFlip();
   }
 
-  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-
-    const delta = drag.startX - event.clientX;
-    if (Math.abs(delta) > 6) drag.moved = true;
-
-    const next = Math.max(
-      drag.startRotation - 180,
-      Math.min(
-        drag.startRotation + 180,
-        drag.startRotation + (delta / drag.width) * 180
-      )
-    );
-    setRotation(next);
-  }
-
-  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    const delta = drag.startX - event.clientX;
-    const current = Math.max(
-      drag.startRotation - 180,
-      Math.min(
-        drag.startRotation + 180,
-        drag.startRotation + (delta / drag.width) * 180
-      )
-    );
-    const snappedRotation = Math.round(current / 180) * 180;
-
-    if (drag.moved) {
-      suppressTapRef.current = true;
-      window.setTimeout(() => {
-        suppressTapRef.current = false;
-      }, 50);
-      snapTo(snappedRotation);
-    } else if (!suppressTapRef.current) {
-      if (!flipped) {
-        // Single tap/click → flip to items
-        snapTo(rotation + 180);
-      } else {
-        // Double tap/click → flip back to original
-        const now = Date.now();
-        if (now - lastBackTapRef.current < 350) {
-          lastBackTapRef.current = 0;
-          handledDoubleTapRef.current = true;
-          window.setTimeout(() => {
-            handledDoubleTapRef.current = false;
-          }, 400);
-          snapTo(rotation + 180);
-        } else {
-          lastBackTapRef.current = now;
-        }
-      }
-    }
-
-    dragRef.current = null;
-    setDragging(false);
-  }
-
-  function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
-    const target = event.target as HTMLElement;
-    if (target.closest("a")) return;
-    // Already handled by the second click in onPointerUp.
-    if (handledDoubleTapRef.current) return;
-    if (!flipped) return;
-    event.preventDefault();
-    lastBackTapRef.current = 0;
-    snapTo(rotation + 180);
-  }
+  const rotation = flipped ? 180 : 0;
 
   return (
     <li
@@ -240,40 +137,34 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
             animationDelay: `-${(seededRandom(group.id, 2) * 8).toFixed(2)}s`,
             animationDirection:
               seededRandom(group.id, 3) > 0.5 ? "normal" : "reverse",
-            animationPlayState: dragging ? "paused" : "running",
           } as CSSProperties
         }
       >
       <div
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onDoubleClick={onDoubleClick}
-        title={
-          flipped
-            ? "Tap rotate to flip back, or double-tap the card"
-            : "Tap to view items"
-        }
-        className={`relative h-full w-full select-none ${
-          dragging ? "cursor-grabbing" : "cursor-grab"
-        }`}
+        className="relative h-full w-full select-none"
         style={
           {
             transform: `rotateY(${rotation}deg)`,
             transformStyle: "preserve-3d",
             WebkitTransformStyle: "preserve-3d",
-            transition: dragging
-              ? "none"
-              : "transform 450ms cubic-bezier(0.22, 1, 0.36, 1)",
-            touchAction: "none",
+            transition: "transform 450ms cubic-bezier(0.22, 1, 0.36, 1)",
           } as CSSProperties
         }
       >
         {/* Front */}
         <div
-          className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border border-border bg-card p-2.5 text-center shadow-sm"
-          style={{ ...faceStyle, transform: "rotateY(0deg)" }}
+          role="button"
+          tabIndex={flipped ? -1 : 0}
+          aria-label={`${group.name} — tap to view items`}
+          onClick={onFaceClick}
+          className="absolute inset-0 flex cursor-pointer flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border border-border bg-card p-2.5 text-center shadow-sm"
+          style={{
+            ...faceStyle,
+            transform: "rotateY(0deg)",
+            pointerEvents: flipped ? "none" : "auto",
+            zIndex: flipped ? 0 : 1,
+            touchAction: "manipulation",
+          }}
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-base font-semibold text-accent-foreground">
             {group.name.trim().charAt(0).toUpperCase() || "G"}
@@ -316,8 +207,18 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
 
         {/* Back */}
         <div
-          className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-sm"
-          style={{ ...faceStyle, transform: "rotateY(180deg)" }}
+          role="button"
+          tabIndex={flipped ? 0 : -1}
+          aria-label={`${group.name} items — tap to flip back`}
+          onClick={onFaceClick}
+          className="absolute inset-0 flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-sm"
+          style={{
+            ...faceStyle,
+            transform: "rotateY(180deg)",
+            pointerEvents: flipped ? "auto" : "none",
+            zIndex: flipped ? 1 : 0,
+            touchAction: "manipulation",
+          }}
         >
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
@@ -330,24 +231,9 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
               type="button"
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Flip back"
-              onPointerDown={(e) => {
-                // Don't start card drag / double-tap tracking
-                e.stopPropagation();
-                e.preventDefault();
-              }}
-              onPointerUp={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                suppressTapRef.current = true;
-                window.setTimeout(() => {
-                  suppressTapRef.current = false;
-                }, 80);
-                // Single tap on icon flips back (card still needs double-tap)
-                snapTo(rotation + 180);
-              }}
               onClick={(e) => {
                 e.stopPropagation();
-                e.preventDefault();
+                toggleFlip();
               }}
             >
               <RotateCw className="h-4 w-4 -scale-x-100" />
@@ -379,7 +265,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                   No assigned items yet
                 </p>
                 <p className="mt-2 text-[10px] text-muted-foreground/80">
-                  Tap rotate to flip back, or double-tap the card
+                  Tap the card to flip back
                 </p>
               </div>
             )}
@@ -388,16 +274,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
           <Link
             href={`/groups/${group.id}`}
             className="flex w-full items-center justify-between border-t border-border/60 pt-2 transition-colors hover:opacity-90"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              suppressTapRef.current = true;
-              window.setTimeout(() => {
-                suppressTapRef.current = false;
-              }, 80);
-            }}
+            onClick={(e) => e.stopPropagation()}
             aria-label={`Open ${group.name}`}
           >
             <span className="text-sm font-semibold tabular-nums">
