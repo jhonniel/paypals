@@ -300,6 +300,7 @@ function GroupFlipTile({ group }: { group: GroupRow }) {
                       currency={receipt.currency}
                       dense
                       showTotal={billPaid}
+                      hideSubItemAmounts
                     />
                   </div>
                 ))}

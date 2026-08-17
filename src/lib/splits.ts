@@ -211,6 +211,18 @@ export function splitItemAmount(
     return map;
   }
 
+  if (mode === "among_claimers") {
+    if (assignments.length === 0) return new Map();
+    const qtyOnReceipt = Math.max(0.001, itemQuantity || 1);
+    if (qtyOnReceipt > 1) {
+      return allocateQuantity(itemTotal, itemQuantity, assignments);
+    }
+    return allocateEqual(
+      itemTotal,
+      assignments.map((a) => a.memberId)
+    );
+  }
+
   if (assignments.length === 0) return new Map();
 
   const method = assignments[0]?.splitMethod ?? "equal";
@@ -435,6 +447,30 @@ export function itemPickShareLabel(
   if (resolved === "among_n" && n > 1) return "Per share";
   if (resolved === "among_claimers" && qty > 1) return "Per unit";
   return "You pay";
+}
+
+/** Price to show on receipt/member lists (share, not full line total when split). */
+export function itemListDisplayShareAmount(
+  itemTotal: number,
+  quantity: number,
+  mode: ItemSplitMode | null | undefined,
+  splitN: number | null | undefined,
+  groupSize: number,
+  claimerCount: number
+): number {
+  const total = Number(itemTotal) || 0;
+  const perPerson = itemSplitPerPersonAmount(total, mode, splitN, groupSize);
+  if (perPerson != null) return perPerson;
+
+  const qty = Math.max(0.001, Number(quantity) || 1);
+  const resolved = mode ?? "among_n";
+  if (resolved === "among_claimers") {
+    if (qty > 1) return moneyNumber(total / qty);
+    if (claimerCount > 0) return moneyNumber(total / claimerCount);
+  }
+  const n = Math.max(1, Math.floor(Number(splitN) || 1));
+  if (resolved === "among_n" && n > 1) return moneyNumber(total / n);
+  return moneyNumber(total);
 }
 
 function ensureMember(

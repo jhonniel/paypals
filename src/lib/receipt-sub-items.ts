@@ -45,3 +45,22 @@ export function toOcrSubItems(items: ReceiptSubItem[]): OcrSubItemShape[] {
     ...(s.sub_items?.length ? { subItems: toOcrSubItems(s.sub_items) } : {}),
   }));
 }
+
+/** Scale modifier amounts to match a member's share of the parent line. */
+export function scaleSubItemsForShare(
+  items: ReceiptSubItem[],
+  ratio: number
+): ReceiptSubItem[] {
+  if (!items.length || ratio >= 0.9999) return items;
+  const scale = (amount: number | null | undefined) => {
+    if (amount == null || amount <= 0) return amount ?? null;
+    return Math.round(amount * ratio * 100) / 100;
+  };
+  return items.map((entry) => ({
+    ...entry,
+    amount: scale(entry.amount),
+    ...(entry.sub_items?.length
+      ? { sub_items: scaleSubItemsForShare(entry.sub_items, ratio) }
+      : {}),
+  }));
+}

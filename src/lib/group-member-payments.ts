@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { moneyNumber } from "@/lib/money";
 import {
   normalizeSubItems,
+  scaleSubItemsForShare,
   type ReceiptSubItem,
 } from "@/lib/receipt-sub-items";
 import {
@@ -261,8 +262,10 @@ export async function getGroupMemberPayments(
     }>;
 
     const subItemsById = new Map<string, ReceiptSubItem[]>();
+    const itemTotalById = new Map<string, number>();
     for (const item of items) {
       subItemsById.set(item.id, normalizeSubItems(item.sub_items));
+      itemTotalById.set(item.id, Number(item.total_price) || 0);
     }
 
     const splitItems: ItemSplitInput[] = items.map((item) => {
@@ -322,11 +325,19 @@ export async function getGroupMemberPayments(
             asg?.share_quantity != null && asg.share_quantity > 0
               ? Number(asg.share_quantity)
               : 1;
-          const subs = subItemsById.get(line.itemId) ?? [];
+          const lineAmount = moneyNumber(line.amount);
+          const itemTotal = itemTotalById.get(line.itemId) ?? 0;
+          const shareRatio =
+            itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
+          const rawSubs = subItemsById.get(line.itemId) ?? [];
+          const subs =
+            rawSubs.length && shareRatio < 0.9999
+              ? scaleSubItemsForShare(rawSubs, shareRatio)
+              : rawSubs;
           receiptItems.push({
             name: line.itemName,
             quantity: qty,
-            amount: moneyNumber(line.amount),
+            amount: lineAmount,
             ...(subs.length ? { sub_items: subs } : {}),
           });
         }

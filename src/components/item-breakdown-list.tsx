@@ -24,12 +24,14 @@ function SubItems({
   dense,
   label,
   depth = 0,
+  hideAmounts = false,
 }: {
   items: ReceiptSubItem[];
   currency: string;
   dense: boolean;
   label: (name: string) => string;
   depth?: number;
+  hideAmounts?: boolean;
 }) {
   if (!items.length) return null;
   return (
@@ -53,7 +55,7 @@ function SubItems({
               </span>
               {label(sub.name)}
             </span>
-            {sub.amount != null && sub.amount > 0 ? (
+            {sub.amount != null && sub.amount > 0 && !hideAmounts ? (
               <span className="shrink-0 tabular-nums">
                 {money(sub.amount, currency)}
               </span>
@@ -66,6 +68,7 @@ function SubItems({
               dense={dense}
               label={label}
               depth={depth + 1}
+              hideAmounts={hideAmounts}
             />
           ) : null}
         </li>
@@ -81,6 +84,7 @@ export function ItemBreakdownList({
   titleCase,
   showTotal = false,
   total,
+  hideSubItemAmounts = false,
 }: {
   items: BreakdownItem[];
   currency?: string;
@@ -89,6 +93,8 @@ export function ItemBreakdownList({
   showTotal?: boolean;
   /** Override computed sum when the caller has an authoritative total. */
   total?: number;
+  /** Hide add-on prices under member shares (names only). */
+  hideSubItemAmounts?: boolean;
 }) {
   const label = (name: string) => (titleCase ? titleCase(name) : name);
   const itemsTotal = items.reduce((sum, item) => sum + (item.amount ?? 0), 0);
@@ -120,6 +126,7 @@ export function ItemBreakdownList({
                 currency={currency}
                 dense={dense}
                 label={label}
+                hideAmounts={hideSubItemAmounts}
               />
             </li>
           );

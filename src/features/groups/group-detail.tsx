@@ -41,7 +41,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
 import { publicEnv } from "@/lib/env";
 import { formatGroupInviteCode } from "@/lib/group-invite-code";
-import { itemSplitPerPersonAmount } from "@/lib/splits";
+import { itemListDisplayShareAmount, itemSplitPerPersonAmount } from "@/lib/splits";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
 import { GroupAddReceiptModal } from "@/features/groups/group-add-receipt-modal";
 import { readApiJson } from "@/lib/api-client";
@@ -473,6 +473,22 @@ function GroupReceiptCard({
                       : "Not claimed yet";
               const claimUnclaimed = ownerLine?.unclaimed ?? false;
 
+              const claimerCount =
+                (item.claims ?? []).length ||
+                (item.claimer_ids ?? []).length ||
+                (item.claimed_by ?? []).length;
+              const displayPrice = itemListDisplayShareAmount(
+                Number(item.total_price),
+                Number(item.quantity) || 1,
+                (item.split_mode as "among_claimers" | "among_group" | "among_n") ??
+                  "among_n",
+                item.split_n,
+                groupMemberCount,
+                claimerCount
+              );
+              const showShareLabel =
+                Math.abs(displayPrice - Number(item.total_price)) > 0.01;
+
               return (
                 <li key={item.id} className="text-sm">
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2">
@@ -483,7 +499,14 @@ function GroupReceiptCard({
                       {item.quantity !== 1 ? `×${item.quantity}` : ""}
                     </span>
                     <span className="min-w-[4.75rem] text-right tabular-nums text-muted-foreground">
-                      {money(item.total_price, currency)}
+                      <span className="block font-medium text-foreground">
+                        {money(displayPrice, currency)}
+                      </span>
+                      {showShareLabel ? (
+                        <span className="text-[9px] uppercase tracking-wide">
+                          share
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                   <p
@@ -1825,6 +1848,7 @@ export function GroupDetailView({
                         showTotal={
                           isPaid || (isBillPayer && owesTotal <= 0)
                         }
+                        hideSubItemAmounts
                       />
                     ) : (
                       <p className="text-[11px] italic text-muted-foreground/70">

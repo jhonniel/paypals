@@ -20,7 +20,7 @@ import {
   type ItemSplitInput,
   type ItemSplitMode,
 } from "@/lib/splits";
-import { normalizeSubItems } from "@/lib/receipt-sub-items";
+import { normalizeSubItems, scaleSubItemsForShare } from "@/lib/receipt-sub-items";
 import {
   fetchReceiptDiscountsByReceiptIds,
   normalizeDiscountRows,
@@ -345,12 +345,14 @@ export async function GET(req: Request, { params }: Params) {
       null;
 
     const subItemsByItemId = new Map<string, ReturnType<typeof normalizeSubItems>>();
+    const itemTotalByItemId = new Map<string, number>();
     for (const r of detailed) {
       for (const item of r.items) {
         subItemsByItemId.set(
           item.id,
           normalizeSubItems((item as { sub_items?: unknown }).sub_items)
         );
+        itemTotalByItemId.set(item.id, Number(item.total_price) || 0);
       }
     }
 
@@ -412,14 +414,21 @@ export async function GET(req: Request, { params }: Params) {
             asg?.share_quantity != null && asg.share_quantity > 0
               ? Number(asg.share_quantity)
               : 1;
+          const lineAmount = moneyNumber(line.amount);
+          const itemTotal = itemTotalByItemId.get(line.itemId) ?? 0;
+          const shareRatio =
+            itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
+          const rawSubs = subItemsByItemId.get(line.itemId) ?? [];
+          const scaledSubs =
+            rawSubs.length && shareRatio < 0.9999
+              ? scaleSubItemsForShare(rawSubs, shareRatio)
+              : rawSubs;
           acc.items.push({
             name: line.itemName,
             quantity: qty,
-            amount: moneyNumber(line.amount),
+            amount: lineAmount,
             merchant: r.merchant,
-            ...(subItemsByItemId.get(line.itemId)?.length
-              ? { sub_items: subItemsByItemId.get(line.itemId) }
-              : {}),
+            ...(scaledSubs.length ? { sub_items: scaledSubs } : {}),
           });
         }
         for (const adj of memberAdjustmentLines(
