@@ -93,7 +93,7 @@ export async function GET() {
           supabase,
           m.group_id as string,
           memberIds,
-          { includeReceiptDetails: false }
+          { includeReceiptDetails: true }
         );
         const pay = payments.find((payment) => payment.member_id === m.id);
         const payTotal = pay?.total ?? 0;
