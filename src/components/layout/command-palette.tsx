@@ -17,18 +17,22 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@/utils/cn";
+import type { Profile } from "@/types/database";
 
-const navItems = [
+const baseNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Upload receipt", href: "/receipts/new", icon: Upload },
   { label: "Receipts", href: "/receipts", icon: Receipt },
   { label: "Groups", href: "/groups", icon: Users },
   { label: "Friends", href: "/friends", icon: UserPlus },
   { label: "Pal owes me", href: "/pal-owes-me", icon: HandCoins },
-  { label: "Analytics", href: "/analytics", icon: BarChart3 },
-  { label: "Admin", href: "/admin", icon: Shield },
   { label: "Profile", href: "/profile", icon: User },
   { label: "Settings", href: "/settings", icon: Settings },
+];
+
+const adminNavItems = [
+  { label: "Analytics", href: "/analytics", icon: BarChart3 },
+  { label: "Admin", href: "/admin", icon: Shield },
 ];
 
 type SearchResult = {
@@ -40,13 +44,18 @@ type SearchResult = {
 export function CommandPalette({
   open,
   onOpenChange,
+  profile,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  profile?: Profile | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<SearchResult | null>(null);
+  const navItems = profile?.is_admin
+    ? [...baseNavItems, ...adminNavItems]
+    : baseNavItems;
 
   React.useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {

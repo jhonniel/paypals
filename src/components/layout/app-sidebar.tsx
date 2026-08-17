@@ -32,8 +32,12 @@ const nav = [
   { href: "/groups", label: "Groups", icon: Users },
   { href: "/friends", label: "Friends", icon: UserPlus },
   { href: "/pal-owes-me", label: "Pal owes me", icon: HandCoins },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
+];
+
+const adminNav = [
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/admin", label: "Admin", icon: Shield },
 ];
 
 export function AppSidebar({
@@ -46,9 +50,7 @@ export function AppSidebar({
   const pathname = usePathname();
   const reduceMotion = useReducedMotion();
   const [boot, setBoot] = useState(true);
-  const items = profile?.is_admin
-    ? [...nav, { href: "/admin", label: "Admin", icon: Shield }]
-    : nav;
+  const items = profile?.is_admin ? [...nav, ...adminNav] : nav;
 
   useEffect(() => {
     const t = window.setTimeout(() => setBoot(false), 1500);

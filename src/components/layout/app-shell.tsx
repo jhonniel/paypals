@@ -103,7 +103,7 @@ export function AppShell({
         <MobileBottomNav />
       </div>
 
-      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
+      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} profile={profile} />
       <AnnouncementGate userId={profile?.id ?? null} />
     </div>
   );
