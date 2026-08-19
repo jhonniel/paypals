@@ -56,12 +56,36 @@ export type UnclaimedReceiptRow = {
   totalValue: number;
 };
 
+export type GroupPayableRow = {
+  groupId: string;
+  groupName: string;
+  owes: number;
+  share: number;
+  currency: string;
+  isBillPayer: boolean;
+  isPaid: boolean;
+  receipts: Array<{
+    receipt_id: string;
+    merchant: string | null;
+    receipt_date: string | null;
+    currency: string;
+    amount: number;
+    items: Array<{
+      name: string;
+      quantity: number;
+      amount: number;
+      group_split?: boolean;
+    }>;
+  }>;
+};
+
 export type DashboardData = {
   stats: {
     userSpent: number;
     userSpentThisMonth: number;
     overallSpent: number;
     userOwes: number;
+    groupPayableCount: number;
     monthlySpend: number;
     groupsCount: number;
     friendsCount: number;
@@ -102,6 +126,11 @@ export type DashboardData = {
   palOweToOthers: PalOweToOthersRow[];
   unclaimedReceipts: UnclaimedReceiptRow[];
   confirmedPayments: ConfirmedPaymentRow[];
+  groupPayables: {
+    totalOwes: number;
+    currency: string;
+    groups: GroupPayableRow[];
+  };
 };
 
 async function fetchDashboard(): Promise<DashboardData> {

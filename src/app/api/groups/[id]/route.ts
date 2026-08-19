@@ -16,6 +16,7 @@ import {
 import {
   computeSplitBalances,
   memberAdjustmentLines,
+  memberPaymentItemDisplay,
   type AssignmentInput,
   type ItemSplitInput,
   type ItemSplitMode,
@@ -324,6 +325,7 @@ export async function GET(req: Request, { params }: Params) {
           quantity: number;
           amount: number;
           merchant: string | null;
+          receipt_id?: string;
           sub_items?: ReturnType<typeof normalizeSubItems>;
           group_split?: boolean;
         }>;
@@ -416,19 +418,23 @@ export async function GET(req: Request, { params }: Params) {
               ? Number(asg.share_quantity)
               : 1;
           const itemMeta = r.items.find((i) => i.id === line.itemId);
-          let lineAmount = moneyNumber(line.amount);
-          if (
-            (itemMeta as { split_mode?: string } | undefined)?.split_mode ===
-              "among_group" &&
-            memberIds.length > 0
-          ) {
-            lineAmount = moneyNumber(
-              Number(itemMeta?.total_price ?? 0) / memberIds.length
-            );
-          }
+          const claimerCount = (assignmentsByItem.get(line.itemId) ?? []).length;
+          const { amount: itemShareAmount, group_split: groupSplit } =
+            memberPaymentItemDisplay({
+              lineAmount: line.amount,
+              itemTotal: Number(itemMeta?.total_price ?? line.amount),
+              itemQuantity: Number(itemMeta?.quantity) || 1,
+              splitMode:
+                ((itemMeta as { split_mode?: string } | undefined)?.split_mode as
+                  | ItemSplitMode
+                  | undefined) ?? "among_n",
+              splitN: (itemMeta as { split_n?: number | null } | undefined)?.split_n ?? null,
+              groupMemberCount: memberIds.length,
+              claimerCount,
+            });
           const itemTotal = itemTotalByItemId.get(line.itemId) ?? 0;
           const shareRatio =
-            itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
+            itemTotal > 0 ? Math.min(1, itemShareAmount / itemTotal) : 1;
           const rawSubs = subItemsByItemId.get(line.itemId) ?? [];
           const scaledSubs =
             rawSubs.length && shareRatio < 0.9999
@@ -436,17 +442,11 @@ export async function GET(req: Request, { params }: Params) {
               : rawSubs;
           acc.items.push({
             name: line.itemName,
-            quantity:
-              (itemMeta as { split_mode?: string } | undefined)?.split_mode ===
-              "among_group"
-                ? 1
-                : qty,
-            amount: lineAmount,
+            quantity: groupSplit ? 1 : qty,
+            amount: itemShareAmount,
             merchant: r.merchant,
-            ...((itemMeta as { split_mode?: string } | undefined)?.split_mode ===
-            "among_group"
-              ? { group_split: true }
-              : {}),
+            receipt_id: r.id,
+            ...(groupSplit ? { group_split: true } : {}),
             ...(scaledSubs.length ? { sub_items: scaledSubs } : {}),
           });
         }
@@ -467,6 +467,7 @@ export async function GET(req: Request, { params }: Params) {
             quantity: 1,
             amount: moneyNumber(adj.amount),
             merchant: r.merchant,
+            receipt_id: r.id,
           });
         }
       }
@@ -714,7 +715,7 @@ export async function GET(req: Request, { params }: Params) {
     return ok({
       group: { ...group, invite_code: inviteCode },
       members: visibleMembers,
-      member_count: membersVisible ? (members ?? []).length : visibleMembers.length,
+      member_count: (members ?? []).length,
       receipts: receiptsForClient,
       my_role: my?.role ?? null,
       my_member_id: my?.id ?? null,

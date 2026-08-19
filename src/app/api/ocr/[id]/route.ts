@@ -1,5 +1,5 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
-import { getActiveOcrProviderName } from "@/services/ocr";
+import { getActiveOcrProviderName, getOcrConfigurationError } from "@/services/ocr";
 import {
   emptyOcrResult,
   extractWithPreprocess,
@@ -65,24 +65,36 @@ export async function POST(_request: Request, { params }: Params) {
         : undefined;
 
     let ocrResult;
-    let ocrError: string | null = null;
+    let ocrError: string | null = getOcrConfigurationError(preferred);
+    let ocrNotConfigured = Boolean(ocrError);
     let preprocessMeta = null;
-    try {
-      const ran = await extractWithPreprocess(
-        buffer,
-        image.mime_type || "image/jpeg",
-        image.storage_path.split("/").pop(),
-        preferred
-      );
-      ocrResult = ran.result;
-      preprocessMeta = ran.meta;
-      if (!ocrResult.items.length && ocrResult.total == null) {
-        throw new Error("No line items found on receipt");
+
+    if (!ocrError) {
+      try {
+        const ran = await extractWithPreprocess(
+          buffer,
+          image.mime_type || "image/jpeg",
+          image.storage_path.split("/").pop(),
+          preferred
+        );
+        ocrResult = ran.result;
+        preprocessMeta = ran.meta;
+        if (!ocrResult.items.length && ocrResult.total == null) {
+          throw new Error("No line items found on receipt");
+        }
+      } catch (err) {
+        ocrError = err instanceof Error ? err.message : "OCR failed";
+        console.error("[re-OCR]", ocrError);
+        ocrResult = emptyOcrResult(preferred ?? getActiveOcrProviderName(), ocrError);
       }
-    } catch (err) {
-      ocrError = err instanceof Error ? err.message : "OCR failed";
-      console.error("[re-OCR]", ocrError);
+    } else {
+      console.warn("[re-OCR]", ocrError);
       ocrResult = emptyOcrResult(preferred ?? getActiveOcrProviderName(), ocrError);
+      preprocessMeta = {
+        preprocessSteps: ["not_configured"],
+        enhanced: false,
+        usedBinaryPass: false,
+      };
     }
 
     const duration = Date.now() - started;
@@ -154,7 +166,9 @@ export async function POST(_request: Request, { params }: Params) {
         status: "ocr_complete",
         ocr_confidence: ocrResult.confidence,
         notes: ocrError
-          ? `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
+          ? ocrNotConfigured
+            ? `${ocrError} Restart the dev server after updating .env.local.`
+            : `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
           : null,
       })
       .eq("id", id)
@@ -184,6 +198,7 @@ export async function POST(_request: Request, { params }: Params) {
       receipt: updated,
       items: items ?? [],
       warning: ocrError,
+      ocrNotConfigured,
       provider: ocrResult.provider,
       ocrFailed: Boolean(ocrError),
     });

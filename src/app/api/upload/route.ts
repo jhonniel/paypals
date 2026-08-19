@@ -1,5 +1,5 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
-import { getActiveOcrProviderName } from "@/services/ocr";
+import { getActiveOcrProviderName, getOcrConfigurationError } from "@/services/ocr";
 import {
   emptyOcrResult,
   extractWithPreprocess,
@@ -288,7 +288,8 @@ export async function POST(request: Request) {
 
     const started = Date.now();
     let ocrResult;
-    let ocrError: string | null = null;
+    let ocrError: string | null = getOcrConfigurationError();
+    let ocrNotConfigured = Boolean(ocrError);
     let preprocessMeta: {
       preprocessSteps: string[];
       enhanced: boolean;
@@ -296,20 +297,30 @@ export async function POST(request: Request) {
       pass?: string;
     } | null = null;
 
-    try {
-      const ran = await extractWithPreprocess(buffer, mime, fileName);
-      ocrResult = ran.result;
-      preprocessMeta = ran.meta;
-      if (!ocrResult.items.length && ocrResult.total == null) {
-        throw new Error("No line items found on receipt");
+    if (!ocrError) {
+      try {
+        const ran = await extractWithPreprocess(buffer, mime, fileName);
+        ocrResult = ran.result;
+        preprocessMeta = ran.meta;
+        if (!ocrResult.items.length && ocrResult.total == null) {
+          throw new Error("No line items found on receipt");
+        }
+      } catch (err) {
+        // Never inject fake demo (Jollibee) data — leave an empty editable receipt
+        ocrError = err instanceof Error ? err.message : "OCR failed";
+        console.error("[upload OCR]", ocrError);
+        ocrResult = emptyOcrResult(getActiveOcrProviderName(), ocrError);
+        preprocessMeta = {
+          preprocessSteps: ["failed"],
+          enhanced: false,
+          usedBinaryPass: false,
+        };
       }
-    } catch (err) {
-      // Never inject fake demo (Jollibee) data — leave an empty editable receipt
-      ocrError = err instanceof Error ? err.message : "OCR failed";
-      console.error("[upload OCR]", ocrError);
+    } else {
+      console.warn("[upload OCR]", ocrError);
       ocrResult = emptyOcrResult(getActiveOcrProviderName(), ocrError);
       preprocessMeta = {
-        preprocessSteps: ["failed"],
+        preprocessSteps: ["not_configured"],
         enhanced: false,
         usedBinaryPass: false,
       };
@@ -459,7 +470,9 @@ export async function POST(request: Request) {
         receipt_date: ocrResult.date ? tryReceiptDate(ocrResult.date) : null,
         receipt_time: ocrResult.time ? tryReceiptTime(ocrResult.time) : null,
         notes: ocrError
-          ? `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
+          ? ocrNotConfigured
+            ? `${ocrError} Restart the dev server after updating .env.local.`
+            : `OCR could not read this receipt (${ocrError}). Add items manually or tap Re-run OCR.`
           : null,
       });
     } else if (existingReceipt) {
@@ -529,6 +542,7 @@ export async function POST(request: Request) {
       confidence: ocrResult.confidence,
       provider: ocrResult.provider,
       ocrFailed: Boolean(ocrError),
+      ocrNotConfigured,
       warning: ocrError,
       appended: Boolean(appendReceiptId),
     });

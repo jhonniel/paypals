@@ -8,22 +8,9 @@ import type { OcrInput, OcrProvider, OcrResult } from "@/services/ocr/types";
 export class DemoOcrProvider implements OcrProvider {
   readonly name = "ocrspace" as const;
 
-  async extract(input: OcrInput): Promise<OcrResult> {
-    void input;
-    return {
-      provider: "ocrspace",
-      merchant: null,
-      date: null,
-      time: null,
-      items: [],
-      subtotal: null,
-      tax: null,
-      discount: null,
-      serviceCharge: null,
-      tip: null,
-      total: null,
-      confidence: null,
-      raw: { demo: true, message: "No OCR API key configured" },
-    };
+  async extract(_input: OcrInput): Promise<OcrResult> {
+    throw new Error(
+      "No OCR API key configured. Set OCR_SPACE_API_KEY (or another provider key) in .env.local."
+    );
   }
 }

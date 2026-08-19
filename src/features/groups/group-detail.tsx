@@ -41,7 +41,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useGroupRealtime } from "@/hooks/use-realtime";
 import { publicEnv } from "@/lib/env";
 import { formatGroupInviteCode } from "@/lib/group-invite-code";
-import { itemListDisplayShareAmount, itemSplitPerPersonAmount } from "@/lib/splits";
+import {
+  itemListDisplayShareAmount,
+  itemSplitPerPersonAmount,
+  resolveGroupSplitDivisor,
+} from "@/lib/splits";
 import { GroupClaimGate } from "@/features/groups/group-claim-gate";
 import { GroupAddReceiptModal } from "@/features/groups/group-add-receipt-modal";
 import { readApiJson } from "@/lib/api-client";
@@ -152,6 +156,7 @@ type GroupDetail = {
       quantity: number;
       amount: number;
       merchant: string | null;
+      receipt_id?: string;
       sub_items?: ReceiptSubItem[];
       group_split?: boolean;
     }>;
@@ -182,6 +187,19 @@ function money(value: number, currency = "PHP") {
     currency,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function memberReceiptShare(
+  payments: GroupDetail["member_payments"],
+  memberId: string | null | undefined,
+  receiptId: string
+): number | undefined {
+  if (!memberId || !payments) return undefined;
+  const pay = payments.find((p) => p.member_id === memberId);
+  if (!pay) return undefined;
+  const lines = pay.items.filter((item) => item.receipt_id === receiptId);
+  if (!lines.length) return undefined;
+  return lines.reduce((sum, item) => sum + item.amount, 0);
 }
 
 function memberLabel(m: GroupDetail["members"][number]) {
@@ -308,6 +326,7 @@ function GroupReceiptCard({
   onPickItems,
   showUnclaimed,
   groupMemberCount = 0,
+  myShareAmount,
   canDelete,
   onDelete,
   deleting,
@@ -316,6 +335,8 @@ function GroupReceiptCard({
   onPickItems?: () => void;
   showUnclaimed?: boolean;
   groupMemberCount?: number;
+  /** This member's share for the receipt (items + adjustments). */
+  myShareAmount?: number | null;
   canDelete?: boolean;
   onDelete?: () => void;
   deleting?: boolean;
@@ -330,6 +351,36 @@ function GroupReceiptCard({
   const when = formatReceiptWhen(r.receipt_date, r.receipt_time);
   const showImage = Boolean(r.image_url) && !imageBroken;
   const unclaimed = showUnclaimed ? getReceiptUnclaimedItems(r.items) : null;
+  const previewShareTotal = r.items.reduce((sum, item) => {
+    const claimerCount =
+      (item.claims ?? []).length ||
+      (item.claimer_ids ?? []).length ||
+      (item.claimed_by ?? []).length;
+    return (
+      sum +
+      itemListDisplayShareAmount(
+        Number(item.total_price),
+        Number(item.quantity) || 1,
+        (item.split_mode as "among_claimers" | "among_group" | "among_n") ??
+          "among_n",
+        item.split_n,
+        groupMemberCount,
+        claimerCount,
+        claimerCount
+      )
+    );
+  }, 0);
+  const showMemberShare =
+    myShareAmount != null && myShareAmount >= 0 && groupMemberCount > 0;
+  const footerAmount = showMemberShare
+    ? myShareAmount
+    : previewShareTotal > 0 &&
+        Math.abs(previewShareTotal - Number(r.total)) > 0.01
+      ? previewShareTotal
+      : Number(r.total);
+  const footerLabel = showMemberShare || previewShareTotal !== Number(r.total)
+    ? "Your share"
+    : "Amount due";
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -448,13 +499,18 @@ function GroupReceiptCard({
                   : (item.claimed_by ?? []).join(", ");
               const isGroupSplit = item.split_mode === "among_group";
               const othersN = item.others_claim_count ?? 0;
+              const claimerCount =
+                (item.claims ?? []).length ||
+                (item.claimer_ids ?? []).length ||
+                (item.claimed_by ?? []).length;
               const groupPerPerson =
                 isGroupSplit && groupMemberCount > 0
                   ? itemSplitPerPersonAmount(
                       Number(item.total_price),
                       "among_group",
                       null,
-                      groupMemberCount
+                      groupMemberCount,
+                      claimerCount
                     )
                   : null;
 
@@ -462,8 +518,8 @@ function GroupReceiptCard({
               const claimLine = ownerLine
                 ? ownerLine.line
                 : isGroupSplit
-                  ? groupMemberCount > 0 && groupPerPerson != null
-                    ? `Split among ${groupMemberCount} · ${money(groupPerPerson, currency)}/each`
+                  ? groupPerPerson != null
+                    ? `Split among ${resolveGroupSplitDivisor(groupMemberCount, claimerCount)} · ${money(groupPerPerson, currency)}/each`
                     : "Split with whole group"
                   : claimLabel
                     ? othersN > 0
@@ -474,10 +530,6 @@ function GroupReceiptCard({
                       : "Not claimed yet";
               const claimUnclaimed = ownerLine?.unclaimed ?? false;
 
-              const claimerCount =
-                (item.claims ?? []).length ||
-                (item.claimer_ids ?? []).length ||
-                (item.claimed_by ?? []).length;
               const displayPrice = itemListDisplayShareAmount(
                 Number(item.total_price),
                 Number(item.quantity) || 1,
@@ -485,6 +537,7 @@ function GroupReceiptCard({
                   "among_n",
                 item.split_n,
                 groupMemberCount,
+                claimerCount,
                 claimerCount
               );
               const showShareLabel =
@@ -583,9 +636,9 @@ function GroupReceiptCard({
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-2 border-t border-border pt-3">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground sm:grid-cols-[auto_auto]">
-          <dt className="font-medium text-foreground">Amount due</dt>
+          <dt className="font-medium text-foreground">{footerLabel}</dt>
           <dd className="font-semibold tabular-nums text-right text-foreground sm:text-left">
-            {money(Number(r.total), currency)}
+            {money(footerAmount, currency)}
           </dd>
         </dl>
 
@@ -1183,7 +1236,7 @@ export function GroupDetailView({
         groupName={data.group.name}
         receipts={data.pending_claim_receipts!}
         myMemberId={data.my_member_id}
-        memberCount={data.members.length}
+        memberCount={data.member_count ?? data.members.length}
       />
     );
   }
@@ -1302,6 +1355,11 @@ export function GroupDetailView({
                 key={r.id}
                 receipt={r}
                 groupMemberCount={data.member_count ?? data.members.length}
+                myShareAmount={memberReceiptShare(
+                  data.member_payments,
+                  data.my_member_id,
+                  r.id
+                )}
                 showUnclaimed={canManage}
                 canDelete={r.created_by === currentUserId}
                 deleting={deletingReceiptId === r.id}
@@ -2043,7 +2101,7 @@ export function GroupDetailView({
                   groupName={data.group.name}
                   receipts={[claimReceipt]}
                   myMemberId={data.my_member_id}
-                  memberCount={data.members.length}
+                  memberCount={data.member_count ?? data.members.length}
                   variant="modal"
                   onClose={() => setClaimReceiptId(null)}
                 />
@@ -2080,7 +2138,7 @@ export function GroupDetailView({
                 myMemberId={data.my_member_id}
                 forMemberId={claimForMember.memberId}
                 forMemberName={claimForMember.name}
-                memberCount={data.members.length}
+                memberCount={data.member_count ?? data.members.length}
                 variant="modal"
                 onClose={() => setClaimForMember(null)}
               />

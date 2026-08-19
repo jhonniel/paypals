@@ -12,6 +12,38 @@ function resolveProviderName(): OcrProviderName {
   return "ocrspace";
 }
 
+/** Whether the active OCR provider has its API key set. */
+export function isOcrConfigured(provider?: OcrProviderName): boolean {
+  const name = provider ?? resolveProviderName();
+  switch (name) {
+    case "google":
+      return Boolean(process.env.GOOGLE_VISION_API_KEY?.trim());
+    case "openai":
+      return Boolean(process.env.OPENAI_API_KEY?.trim());
+    case "tesseract":
+    case "ocrspace":
+    default:
+      return Boolean(process.env.OCR_SPACE_API_KEY?.trim());
+  }
+}
+
+/** Human-readable message when OCR cannot run (missing API key). */
+export function getOcrConfigurationError(provider?: OcrProviderName): string | null {
+  if (isOcrConfigured(provider)) return null;
+  const name = provider ?? resolveProviderName();
+  switch (name) {
+    case "google":
+      return "Google Vision OCR is not configured. Set GOOGLE_VISION_API_KEY in .env.local.";
+    case "openai":
+      return "OpenAI Vision OCR is not configured. Set OPENAI_API_KEY in .env.local.";
+    case "tesseract":
+      return "Tesseract OCR needs OCR_SPACE_API_KEY in .env.local (uses OCR.Space engine 1).";
+    case "ocrspace":
+    default:
+      return "OCR is not configured. Set OCR_SPACE_API_KEY in .env.local (free key at ocr.space/ocrapi).";
+  }
+}
+
 function createProvider(name: OcrProviderName): OcrProvider {
   switch (name) {
     case "google":

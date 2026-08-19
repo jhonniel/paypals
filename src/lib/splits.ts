@@ -396,11 +396,12 @@ export function itemSplitPerPersonAmount(
   itemTotal: number,
   mode: ItemSplitMode | null | undefined,
   splitN?: number | null,
-  groupSize?: number
+  groupSize?: number,
+  groupClaimerCount?: number
 ): number | null {
   if (mode === "among_group") {
-    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
-    if (n <= 0) return null;
+    const n = resolveGroupSplitDivisor(groupSize ?? 0, groupClaimerCount);
+    if (n <= 1) return null;
     return moneyNumber(itemTotal / n);
   }
   if (mode === "among_n") {
@@ -411,6 +412,18 @@ export function itemSplitPerPersonAmount(
   return null;
 }
 
+/** Effective divisor for whole-group splits (member list may be redacted on the client). */
+export function resolveGroupSplitDivisor(
+  groupSize: number,
+  claimerCount?: number
+): number {
+  return Math.max(
+    1,
+    Math.floor(Number(groupSize) || 0),
+    Math.floor(Number(claimerCount) || 0)
+  );
+}
+
 /** Share amount to show while picking or after a claim (not the full line total). */
 export function itemPickShareAmount(
   itemTotal: number,
@@ -418,14 +431,16 @@ export function itemPickShareAmount(
   mode: ItemSplitMode | null | undefined,
   splitN: number | null | undefined,
   groupSize: number,
-  claimedQty: number
+  claimedQty: number,
+  groupClaimerCount?: number
 ): number {
   const total = Number(itemTotal) || 0;
   const q = Math.max(1, claimedQty);
 
   if (mode === "among_group") {
-    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
-    return moneyNumber((total / n) * q);
+    const n = resolveGroupSplitDivisor(groupSize, groupClaimerCount);
+    if (n <= 1) return moneyNumber(total);
+    return moneyNumber(total / n);
   }
 
   const perPerson = itemSplitPerPersonAmount(total, mode, splitN, groupSize);
@@ -462,11 +477,13 @@ export function itemListDisplayShareAmount(
   mode: ItemSplitMode | null | undefined,
   splitN: number | null | undefined,
   groupSize: number,
-  claimerCount: number
+  claimerCount: number,
+  groupClaimerCount?: number
 ): number {
   const total = Number(itemTotal) || 0;
   if (mode === "among_group") {
-    const n = Math.max(1, Math.floor(Number(groupSize) || 0));
+    const n = resolveGroupSplitDivisor(groupSize, groupClaimerCount ?? claimerCount);
+    if (n <= 1) return moneyNumber(total);
     return moneyNumber(total / n);
   }
 
@@ -482,6 +499,62 @@ export function itemListDisplayShareAmount(
   const n = Math.max(1, Math.floor(Number(splitN) || 1));
   if (resolved === "among_n" && n > 1) return moneyNumber(total / n);
   return moneyNumber(total);
+}
+
+/** Line item amount + flags for member payment / breakdown lists. */
+export function memberPaymentItemDisplay(params: {
+  lineAmount: number;
+  itemTotal: number;
+  itemQuantity: number;
+  splitMode: ItemSplitMode | null | undefined;
+  splitN: number | null | undefined;
+  groupMemberCount: number;
+  claimerCount: number;
+}): { amount: number; group_split: boolean } {
+  const mode = params.splitMode ?? "among_n";
+  const claimerCount = Math.max(0, params.claimerCount);
+  const fullLine = moneyNumber(params.itemTotal);
+  const engineAmount = moneyNumber(params.lineAmount);
+
+  if (mode === "among_group") {
+    const n = resolveGroupSplitDivisor(params.groupMemberCount, claimerCount);
+    if (n <= 1) {
+      return {
+        amount: engineAmount > 0 ? engineAmount : fullLine,
+        group_split: false,
+      };
+    }
+    const shareFromLine = moneyNumber(fullLine / n);
+    const amount =
+      engineAmount > 0 && engineAmount < fullLine - 0.01
+        ? engineAmount
+        : shareFromLine;
+    return { amount, group_split: true };
+  }
+
+  const displayAmount = itemListDisplayShareAmount(
+    params.itemTotal,
+    params.itemQuantity,
+    mode,
+    params.splitN,
+    params.groupMemberCount,
+    claimerCount,
+    claimerCount
+  );
+
+  // Split engine amount reflects claimed shares / qty — prefer when clearly a share
+  if (engineAmount > 0 && Math.abs(engineAmount - fullLine) > 0.01) {
+    return { amount: engineAmount, group_split: false };
+  }
+
+  const showListShare =
+    Math.abs(displayAmount - fullLine) > 0.01 &&
+    (mode === "among_n" || mode === "among_claimers");
+
+  return {
+    amount: showListShare ? displayAmount : engineAmount > 0 ? engineAmount : fullLine,
+    group_split: false,
+  };
 }
 
 function ensureMember(

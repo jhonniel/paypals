@@ -245,6 +245,7 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
             pageCount?: number;
             warning?: string;
             ocrFailed?: boolean;
+            ocrNotConfigured?: boolean;
             appended?: boolean;
           };
         }>(res);
@@ -283,7 +284,14 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
                 : receipt
             )
           );
-          if (payload.warning || payload.ocrFailed) {
+          if (payload.ocrNotConfigured) {
+            toast.error("OCR is not configured", {
+              description:
+                payload.warning ??
+                "Add OCR_SPACE_API_KEY to .env.local, then restart the dev server.",
+              duration: 12_000,
+            });
+          } else if (payload.warning || payload.ocrFailed) {
             toast.message(`Page ${pageNum}: OCR could not read all items`, {
               description: String(
                 payload.warning ?? "Edit manually or tap Re-run OCR."
@@ -299,7 +307,14 @@ export function ReceiptUploader({ groupId }: { groupId?: string | null }) {
         } else {
           setSessionReceipts((prev) => {
             const receiptNum = prev.length + 1;
-            if (payload.warning || payload.ocrFailed) {
+            if (payload.ocrNotConfigured) {
+              toast.error("OCR is not configured", {
+                description:
+                  payload.warning ??
+                  "Add OCR_SPACE_API_KEY to .env.local, then restart the dev server.",
+                duration: 12_000,
+              });
+            } else if (payload.warning || payload.ocrFailed) {
               toast.message(
                 isMergedBatch
                   ? `Page 1: OCR could not read all items`

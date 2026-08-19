@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToCollectModal } from "@/features/dashboard/to-collect-modal";
+import { GroupPayableModal } from "@/features/dashboard/group-payable-modal";
 import { cn } from "@/utils/cn";
 
 function money(value: number, currency = "PHP") {
@@ -45,6 +46,7 @@ export function DashboardView() {
   const router = useRouter();
   const { data, isLoading, error } = useDashboard();
   const [collectOpen, setCollectOpen] = useState(false);
+  const [payableOpen, setPayableOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -90,6 +92,10 @@ export function DashboardView() {
   const unclaimedReceipts = data.unclaimedReceipts ?? [];
   const unclaimedItemCount = data.stats.unclaimedItemCount ?? 0;
   const collectPendingCount = data.stats.collectPendingCount ?? 0;
+  const groupPayableTotal = data.groupPayables?.totalOwes ?? data.stats.userOwes ?? 0;
+  const groupPayableRows = data.groupPayables?.groups ?? [];
+  const groupPayableCurrency = data.groupPayables?.currency ?? "PHP";
+  const groupPayableCount = data.stats.groupPayableCount ?? groupPayableRows.length;
 
   const stats = [
     {
@@ -129,6 +135,21 @@ export function DashboardView() {
             ]
           : []),
       ],
+    },
+    {
+      label: "Group payables",
+      hint:
+        groupPayableCount > 0
+          ? `${groupPayableCount} group${groupPayableCount === 1 ? "" : "s"} · tap for breakdown`
+          : "Unpaid group balances",
+      value: money(groupPayableTotal, groupPayableCurrency),
+      icon: ArrowDownLeft,
+      clickable: true,
+      payable: true,
+      breakdown: groupPayableRows.slice(0, 3).map((row) => ({
+        label: row.groupName,
+        amount: row.owes,
+      })),
     },
     {
       label: "Pal owes me",
@@ -192,9 +213,10 @@ export function DashboardView() {
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
         {stats.map((stat, i) => {
-          const isCollect = "clickable" in stat && stat.clickable;
+          const isPayable = "payable" in stat && stat.payable;
+          const isCollect = "clickable" in stat && stat.clickable && !isPayable;
           const statHref = "href" in stat ? stat.href : undefined;
-          const isNavigable = Boolean(isCollect || statHref);
+          const isNavigable = Boolean(isCollect || isPayable || statHref);
           return (
           <motion.div
             key={stat.label}
@@ -212,6 +234,8 @@ export function DashboardView() {
               onClick={
                 isCollect
                   ? () => setCollectOpen(true)
+                  : isPayable
+                    ? () => setPayableOpen(true)
                   : statHref
                     ? () => router.push(statHref)
                     : undefined
@@ -224,6 +248,7 @@ export function DashboardView() {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         if (isCollect) setCollectOpen(true);
+                        else if (isPayable) setPayableOpen(true);
                         else if (statHref) router.push(statHref);
                       }
                     }
@@ -277,6 +302,15 @@ export function DashboardView() {
           );
         })}
       </div>
+
+      {payableOpen && (
+        <GroupPayableModal
+          totalOwes={groupPayableTotal}
+          currency={groupPayableCurrency}
+          groups={groupPayableRows}
+          onClose={() => setPayableOpen(false)}
+        />
+      )}
 
       {collectOpen && (
         <ToCollectModal

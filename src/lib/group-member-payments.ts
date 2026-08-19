@@ -8,6 +8,7 @@ import {
 import {
   computeSplitBalances,
   memberAdjustmentLines,
+  memberPaymentItemDisplay,
   type AssignmentInput,
   type ItemSplitInput,
   type ItemSplitMode,
@@ -327,18 +328,20 @@ export async function getGroupMemberPayments(
               ? Number(asg.share_quantity)
               : 1;
           const itemMeta = items.find((i) => i.id === line.itemId);
-          let lineAmount = moneyNumber(line.amount);
-          if (
-            itemMeta?.split_mode === "among_group" &&
-            memberIds.length > 0
-          ) {
-            lineAmount = moneyNumber(
-              Number(itemMeta.total_price) / memberIds.length
-            );
-          }
+          const claimerCount = (assignmentsByItem.get(line.itemId) ?? []).length;
+          const { amount: itemShareAmount, group_split: groupSplit } =
+            memberPaymentItemDisplay({
+              lineAmount: line.amount,
+              itemTotal: Number(itemMeta?.total_price ?? line.amount),
+              itemQuantity: Number(itemMeta?.quantity) || 1,
+              splitMode: (itemMeta?.split_mode as ItemSplitMode) ?? "among_n",
+              splitN: itemMeta?.split_n ?? null,
+              groupMemberCount: memberIds.length,
+              claimerCount,
+            });
           const itemTotal = itemTotalById.get(line.itemId) ?? 0;
           const shareRatio =
-            itemTotal > 0 ? Math.min(1, lineAmount / itemTotal) : 1;
+            itemTotal > 0 ? Math.min(1, itemShareAmount / itemTotal) : 1;
           const rawSubs = subItemsById.get(line.itemId) ?? [];
           const subs =
             rawSubs.length && shareRatio < 0.9999
@@ -346,9 +349,9 @@ export async function getGroupMemberPayments(
               : rawSubs;
           receiptItems.push({
             name: line.itemName,
-            quantity: itemMeta?.split_mode === "among_group" ? 1 : qty,
-            amount: lineAmount,
-            ...(itemMeta?.split_mode === "among_group" ? { group_split: true } : {}),
+            quantity: groupSplit ? 1 : qty,
+            amount: itemShareAmount,
+            ...(groupSplit ? { group_split: true } : {}),
             ...(subs.length ? { sub_items: subs } : {}),
           });
         }
@@ -496,4 +499,132 @@ export async function computeUserGroupSpend(
   }
 
   return { totalShare, shareThisMonth, totalOwes, currency };
+}
+
+export type UserGroupPayableRow = {
+  groupId: string;
+  groupName: string;
+  owes: number;
+  share: number;
+  currency: string;
+  isBillPayer: boolean;
+  isPaid: boolean;
+  receipts: MemberPaymentReceipt[];
+};
+
+/** Per-group amounts the user still needs to pay (proof-adjusted). */
+export async function computeUserGroupPayableBreakdown(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<{
+  totalOwes: number;
+  currency: string;
+  groups: UserGroupPayableRow[];
+}> {
+  const { data: memberships } = await supabase
+    .from("group_members")
+    .select("id, group_id, groups(id, name)")
+    .eq("user_id", userId);
+
+  if (!memberships?.length) {
+    return { totalOwes: 0, currency: "PHP", groups: [] };
+  }
+
+  const groupIds = memberships.map((m) => m.group_id as string);
+
+  const [{ data: allGroupMembers }, { data: allProofs }] = await Promise.all([
+    supabase.from("group_members").select("id, group_id").in("group_id", groupIds),
+    supabase
+      .from("group_payment_proofs")
+      .select("group_id, from_member_id, status, expected_amount, ocr_raw")
+      .in("group_id", groupIds),
+  ]);
+
+  const memberIdsByGroup = new Map<string, string[]>();
+  for (const member of allGroupMembers ?? []) {
+    const groupId = member.group_id as string;
+    const list = memberIdsByGroup.get(groupId) ?? [];
+    list.push(member.id as string);
+    memberIdsByGroup.set(groupId, list);
+  }
+
+  const proofByMember = new Map<
+    string,
+    {
+      status: string;
+      expected_amount: number;
+      ocr_raw: unknown;
+    }
+  >();
+  for (const proof of allProofs ?? []) {
+    proofByMember.set(`${proof.group_id}:${proof.from_member_id}`, proof);
+  }
+
+  const rows = await Promise.all(
+    memberships.map(async (m) => {
+      const g = m.groups as unknown as
+        | { id: string; name: string }
+        | { id: string; name: string }[]
+        | null;
+      const group = Array.isArray(g) ? g[0] : g;
+      if (!group) return null;
+
+      const groupId = m.group_id as string;
+      const memberIds = memberIdsByGroup.get(groupId) ?? [];
+      if (!memberIds.length) return null;
+
+      const payments = await getGroupMemberPayments(supabase, groupId, memberIds, {
+        includeReceiptDetails: true,
+      });
+      const pay = payments.find((payment) => payment.member_id === m.id);
+      const payTotal = pay?.total ?? 0;
+      const owesTotal = pay?.owes ?? payTotal;
+      const isBillPayer = pay?.is_bill_payer ?? false;
+      const currency = pay?.currency ?? "PHP";
+
+      let unpaid = owesTotal;
+      let paid = false;
+
+      const proof = proofByMember.get(`${groupId}:${m.id}`);
+
+      if (owesTotal > 0 || isBillPayer) {
+        const proofMeta = parsePaymentProofSource(proof?.ocr_raw);
+        paid = isMemberMarkedPaid(
+          owesTotal,
+          proof
+            ? {
+                status: proof.status,
+                expected_amount: Number(proof.expected_amount),
+                ...proofMeta,
+              }
+            : null
+        );
+        if (paid && owesTotal > 0) unpaid = 0;
+      }
+
+      return {
+        groupId,
+        groupName: group.name,
+        owes: moneyNumber(unpaid),
+        share: moneyNumber(payTotal),
+        currency,
+        isBillPayer,
+        isPaid: paid && (owesTotal > 0 || isBillPayer),
+        receipts: pay?.receipts ?? [],
+      } satisfies UserGroupPayableRow;
+    })
+  );
+
+  const groups = rows
+    .filter((row): row is UserGroupPayableRow => row != null && row.owes > 0)
+    .sort((a, b) => b.owes - a.owes);
+
+  let totalOwes = 0;
+  let currency = "PHP";
+  for (const row of groups) {
+    totalOwes = moneyNumber(totalOwes + row.owes);
+    currency = row.currency || currency;
+  }
+
+  return { totalOwes, currency, groups };
 }

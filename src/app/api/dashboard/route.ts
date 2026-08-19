@@ -2,7 +2,10 @@ import { createClient } from "@/lib/supabase/server";
 import { ok, unauthorized, serverError } from "@/lib/api";
 import { computeOwedToYou } from "@/lib/owed-to-you";
 import { computeConfirmedPayments } from "@/lib/confirmed-payments";
-import { computeUserGroupSpend } from "@/lib/group-member-payments";
+import {
+  computeUserGroupSpend,
+  computeUserGroupPayableBreakdown,
+} from "@/lib/group-member-payments";
 import { computeCollectorUnclaimed } from "@/lib/collector-unclaimed";
 import {
   palDebtRemaining,
@@ -40,6 +43,7 @@ export async function GET() {
       owedToYou,
       confirmed,
       userSpend,
+      groupPayables,
       palDebtsOpenRes,
       palDebtsOweRes,
       spendReceiptsRes,
@@ -77,6 +81,7 @@ export async function GET() {
       computeOwedToYou(supabase, user.id),
       computeConfirmedPayments(supabase, user.id),
       computeUserGroupSpend(supabase, user.id, startOfMonth),
+      computeUserGroupPayableBreakdown(supabase, user.id),
       supabase
         .from("pal_debts")
         .select("id, debtor_id, amount, amount_received, currency")
@@ -288,7 +293,8 @@ export async function GET() {
         userSpent: userSpend.totalShare,
         userSpentThisMonth: userSpend.shareThisMonth,
         overallSpent,
-        userOwes: userSpend.totalOwes,
+        userOwes: groupPayables.totalOwes,
+        groupPayableCount: groupPayables.groups.length,
         monthlySpend,
         groupsCount: groups.length,
         friendsCount: friendsRes.count ?? 0,
@@ -314,6 +320,7 @@ export async function GET() {
       palOweToOthers,
       unclaimedReceipts: unclaimed.receipts,
       confirmedPayments: confirmed.rows,
+      groupPayables,
     });
   } catch (error) {
     console.error(error);

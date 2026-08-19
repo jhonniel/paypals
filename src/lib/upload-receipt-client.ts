@@ -17,6 +17,7 @@ export type UploadReceiptResult = {
   appended?: boolean;
   warning?: string;
   ocrFailed?: boolean;
+  ocrNotConfigured?: boolean;
 };
 
 export async function uploadReceiptFile(options: {

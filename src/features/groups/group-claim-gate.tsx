@@ -14,6 +14,7 @@ import {
   itemPickShareAmount,
   itemPickShareLabel,
   itemSplitModeLabel,
+  resolveGroupSplitDivisor,
   type ItemSplitMode,
 } from "@/lib/splits";
 
@@ -158,6 +159,14 @@ function itemPoolSize(item: ClaimItem) {
   const qtyOnReceipt = Math.max(0, Number(item.quantity) || 0);
   if (mode === "among_n" && splitN > 1) return splitN;
   return Math.max(qtyOnReceipt, 1);
+}
+
+function groupSplitClaimerCount(item: ClaimItem): number {
+  return Math.max((item.claimer_ids ?? []).length, (item.claims ?? []).length);
+}
+
+function groupSplitDivisor(item: ClaimItem, memberCount: number): number {
+  return resolveGroupSplitDivisor(memberCount, groupSplitClaimerCount(item));
 }
 
 function myClaimQty(item: ClaimItem, memberId?: string | null) {
@@ -451,7 +460,8 @@ export function GroupClaimGate({
       mode,
       item.split_n ?? 1,
       memberCount,
-      qty
+      qty,
+      groupSplitClaimerCount(item)
     );
   }
 
@@ -547,7 +557,15 @@ export function GroupClaimGate({
             {current.merchant ?? "Untitled receipt"}
           </CardTitle>
           <CardDescription>
-            Uploaded by {current.uploaded_by} · {money(Number(current.total), currency)}
+            Uploaded by {current.uploaded_by}
+            {payTotal > 0 && Math.abs(payTotal - Number(current.total)) > 0.01 ? (
+              <>
+                {" · "}
+                Your share {money(payTotal, currency)}
+              </>
+            ) : (
+              <> · {money(Number(current.total), currency)}</>
+            )}
             {hasGroupSplitItems ? (
               <span className="mt-1 block text-violet-700 dark:text-violet-300">
                 Violet rows are split with the whole group — everyone pays a share.
@@ -589,11 +607,16 @@ export function GroupClaimGate({
                     on
                   );
               const otherPickers = formatItemPickers(item, claimMemberId);
+              const groupDivisor = wholeGroup ? groupSplitDivisor(item, memberCount) : 0;
+              const lineTotal = Number(item.total_price) || 0;
               const metaParts: string[] = [];
               if (wholeGroup) {
+                if (groupDivisor > 1 && Math.abs(lineTotal - myShare) > 0.01) {
+                  metaParts.push(`Line total ${money(lineTotal, currency)}`);
+                }
                 metaParts.push(
-                  memberCount > 1
-                    ? `Split among ${memberCount} · ${money(myShare, currency)} each`
+                  groupDivisor > 1
+                    ? `Split among ${groupDivisor} · ${money(myShare, currency)} each`
                     : itemSplitModeLabel(mode, item.split_n, memberCount)
                 );
               } else {
