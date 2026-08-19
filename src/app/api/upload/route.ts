@@ -289,7 +289,7 @@ export async function POST(request: Request) {
     const started = Date.now();
     let ocrResult;
     let ocrError: string | null = getOcrConfigurationError();
-    let ocrNotConfigured = Boolean(ocrError);
+    const ocrNotConfigured = Boolean(ocrError);
     let preprocessMeta: {
       preprocessSteps: string[];
       enhanced: boolean;

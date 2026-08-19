@@ -66,7 +66,7 @@ export async function POST(_request: Request, { params }: Params) {
 
     let ocrResult;
     let ocrError: string | null = getOcrConfigurationError(preferred);
-    let ocrNotConfigured = Boolean(ocrError);
+    const ocrNotConfigured = Boolean(ocrError);
     let preprocessMeta = null;
 
     if (!ocrError) {
