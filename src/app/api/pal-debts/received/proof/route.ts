@@ -1,9 +1,10 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { created, unauthorized, fail, serverError } from "@/lib/api";
 import { moneyNumber } from "@/lib/money";
-import { applyPalReceivedPayment } from "@/lib/pal-debt-balance";
+import { applyPalReceivedPayment, getPalDebtorCreditBalance, palDebtorNetBalance, sumPalDebtorOpen } from "@/lib/pal-debt-balance";
 import { extractPaymentProofFields } from "@/services/ocr/extract-payment-proof";
 import { normalizeUploadImage } from "@/lib/convert-heic-server";
+import { paymentProofAmountError } from "@/lib/payment-proof";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -128,12 +129,33 @@ export async function POST(request: Request) {
     let ocrAmount: number | null = null;
     let ocrTxn: string | null = null;
     let ocrMeta: Record<string, unknown> = {};
+    let expectedOwed: number | null = null;
+
+    if (isDebtorPaying) {
+      const { data: openDebts } = await supabase
+        .from("pal_debts")
+        .select("amount, amount_received, status, currency")
+        .eq("creditor_id", creditorId)
+        .eq("debtor_id", debtorId)
+        .eq("status", "open");
+      const creditBalance = await getPalDebtorCreditBalance(
+        supabase,
+        creditorId,
+        debtorId
+      );
+      const openTotal = sumPalDebtorOpen((openDebts ?? []) as Parameters<typeof sumPalDebtorOpen>[0]);
+      expectedOwed = palDebtorNetBalance(openTotal, creditBalance);
+      if (expectedOwed <= 0) {
+        return fail("You have nothing to pay for this pal debt", 400);
+      }
+    }
 
     try {
       const fields = await extractPaymentProofFields(
         buffer,
         normalizedMime,
-        normalizedName
+        normalizedName,
+        expectedOwed
       );
       ocrAmount = fields.amount;
       ocrTxn = fields.transactionNumber;
@@ -158,6 +180,11 @@ export async function POST(request: Request) {
           : "Could not read payment amount from the receipt. Enter the amount manually and try again.",
         422
       );
+    }
+
+    if (isDebtorPaying && expectedOwed != null && expectedOwed > 0) {
+      const amountError = paymentProofAmountError(expectedOwed, paymentAmount);
+      if (amountError) return fail(amountError, 422);
     }
 
     const transactionNumber = isDebtorPaying ? ocrTxn : (manualTxn ?? ocrTxn);

@@ -8,7 +8,7 @@ import {
 } from "@/lib/api";
 import { moneyNumber } from "@/lib/money";
 import { getMemberGroupPayTotal } from "@/lib/group-member-payments";
-import { amountsMatch, todayInManila } from "@/lib/payment-proof";
+import { paymentProofAmountError, todayInManila } from "@/lib/payment-proof";
 import { extractPaymentProofFields } from "@/services/ocr/extract-payment-proof";
 import { normalizeUploadImage } from "@/lib/convert-heic-server";
 
@@ -110,6 +110,9 @@ export async function POST(request: Request, { params }: Params) {
       (normalizedMime === "image/png" ? "png" : "jpg");
     const storagePath = `${user.id}/${groupId}/${membership.id}.${ext}`;
 
+    const today = todayInManila();
+    const expected = moneyNumber(pay.total);
+
     let ocrAmount: number | null = null;
     let ocrDate: string | null = null;
     let ocrMeta: Record<string, unknown> = {};
@@ -118,7 +121,8 @@ export async function POST(request: Request, { params }: Params) {
       const fields = await extractPaymentProofFields(
         buffer,
         normalizedMime,
-        normalizedName
+        normalizedName,
+        expected
       );
       ocrAmount = fields.amount;
       ocrDate = fields.date;
@@ -133,16 +137,13 @@ export async function POST(request: Request, { params }: Params) {
       };
     }
 
-    const today = todayInManila();
-    const expected = moneyNumber(pay.total);
     const reasons: string[] = [];
 
     if (ocrAmount == null) {
       reasons.push("Could not read the payment amount from the screenshot");
-    } else if (!amountsMatch(expected, ocrAmount)) {
-      reasons.push(
-        `Amount ₱${moneyNumber(ocrAmount).toFixed(2)} does not match what you owe (₱${expected.toFixed(2)})`
-      );
+    } else {
+      const amountError = paymentProofAmountError(expected, ocrAmount);
+      if (amountError) reasons.push(amountError);
     }
 
     if (!ocrDate) {

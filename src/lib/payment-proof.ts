@@ -15,7 +15,13 @@ const TXN_LABEL_RE =
   /(?:ref(?:\.|\s)?(?:no|number|#)?|reference(?:\s*(?:no|number|#))?|transaction(?:\s*(?:id|no|number|#))?|txn(?:\s*(?:id|no|number|#))?)\s*[:\-#]?\s*([A-Z0-9][A-Z0-9\-]{5,39})/gi;
 
 const AMOUNT_LABEL_RE =
-  /(?:amount|total|you\s+sent|sent|transfer(?:red)?|paid|payment|bayad)\s*[:\-]?\s*(?:php|₱)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+  /(?:you\s+sent|sent|transfer(?:red)?|paid|payment|bayad|total\s+amount(?:\s+sent)?)\s*[:\-]?\s*(?:php|₱)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+
+const WEAK_AMOUNT_LABEL_RE =
+  /(?:^|\n)\s*(?:amount|total)\s*[:\-]?\s*(?:php|₱)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+
+const BALANCE_CONTEXT_RE =
+  /(?:available\s+balance|remaining\s+balance|wallet\s+balance|current\s+balance|balance\s+after|new\s+balance)/i;
 
 const PHP_AMOUNT_RE =
   /(?:php|₱)\s*([\d,]+(?:\.\d{1,2})?)/gi;
@@ -59,12 +65,57 @@ function parseMoneyToken(raw: string): number | null {
   return n > 0 ? n : null;
 }
 
-function pickBestAmount(candidates: number[]): number | null {
-  if (!candidates.length) return null;
-  const scored = [...new Set(candidates.map((n) => moneyNumber(n)))]
-    .filter((n) => n >= 1 && n <= 500_000)
-    .sort((a, b) => b - a);
-  return scored[0] ?? null;
+function lineHasBalanceContext(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const lineEnd = text.indexOf("\n", index);
+  const line = text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+  return BALANCE_CONTEXT_RE.test(line);
+}
+
+function pickPaymentProofAmount(
+  amounts: number[],
+  labeledAmount: number | null,
+  expected?: number | null
+): number | null {
+  if (labeledAmount != null && labeledAmount > 0) {
+    return moneyNumber(labeledAmount);
+  }
+
+  const unique = [...new Set(amounts.map((n) => moneyNumber(n)))].filter(
+    (n) => n >= 1 && n <= 500_000
+  );
+  if (!unique.length) return null;
+
+  if (expected != null && expected > 0) {
+    const expectedD = d(expected);
+    const tolerance = d(1);
+    const overCandidates = unique.filter((n) =>
+      d(n).gt(expectedD.plus(tolerance))
+    );
+    const withinOrUnder = unique.filter(
+      (n) => !d(n).gt(expectedD.plus(tolerance))
+    );
+    withinOrUnder.sort((a, b) =>
+      d(a).sub(expectedD).abs().comparedTo(d(b).sub(expectedD).abs())
+    );
+    const bestWithinOrUnder = withinOrUnder[0] ?? null;
+
+    // If the screenshot also shows a higher amount, don't silently pick the owed total.
+    if (bestWithinOrUnder != null && overCandidates.length > 0) {
+      overCandidates.sort((a, b) => a - b);
+      return overCandidates[0] ?? null;
+    }
+    if (bestWithinOrUnder != null) return bestWithinOrUnder;
+    if (overCandidates.length > 0) {
+      overCandidates.sort((a, b) => a - b);
+      return overCandidates[0] ?? null;
+    }
+    return null;
+  }
+
+  // Without expected: smallest plausible transfer (balances are usually largest)
+  unique.sort((a, b) => a - b);
+  return unique[0] ?? null;
 }
 
 function parseMonthNameDate(raw: string): string | null {
@@ -108,21 +159,37 @@ function extractDates(text: string): string[] {
 }
 
 /** Parse GCash / Maya / bank transfer screenshot OCR text. */
-export function parsePaymentProofText(raw: string): PaymentProofParse {
+export function parsePaymentProofText(
+  raw: string,
+  expected?: number | null
+): PaymentProofParse {
   const text = raw.replace(/\u00a0/g, " ");
   const hints: string[] = [];
   const amounts: number[] = [];
+  let labeledAmount: number | null = null;
 
   const labeled = text.match(AMOUNT_LABEL_RE);
   if (labeled?.[1]) {
     const n = parseMoneyToken(labeled[1]);
     if (n != null) {
+      labeledAmount = n;
       amounts.push(n);
       hints.push(`labeled:${n}`);
+    }
+  } else {
+    const weak = text.match(WEAK_AMOUNT_LABEL_RE);
+    if (weak?.[1]) {
+      const n = parseMoneyToken(weak[1]);
+      if (n != null) {
+        labeledAmount = n;
+        amounts.push(n);
+        hints.push(`weak-labeled:${n}`);
+      }
     }
   }
 
   for (const m of text.matchAll(PHP_AMOUNT_RE)) {
+    if (lineHasBalanceContext(text, m.index ?? 0)) continue;
     const n = parseMoneyToken(m[1]);
     if (n != null) {
       amounts.push(n);
@@ -132,6 +199,7 @@ export function parsePaymentProofText(raw: string): PaymentProofParse {
 
   if (!amounts.length) {
     for (const m of text.matchAll(PLAIN_MONEY_RE)) {
+      if (lineHasBalanceContext(text, m.index ?? 0)) continue;
       const n = parseMoneyToken(m[1]);
       if (n != null) amounts.push(n);
     }
@@ -151,7 +219,7 @@ export function parsePaymentProofText(raw: string): PaymentProofParse {
   }
 
   return {
-    amount: pickBestAmount(amounts),
+    amount: pickPaymentProofAmount(amounts, labeledAmount, expected),
     date: dates[0] ?? null,
     transactionNumber,
     rawHints: hints,
@@ -177,11 +245,28 @@ export function todayInTimezone(timeZone = PAYMENT_PROOF_TIMEZONE): string {
   }).format(new Date());
 }
 
-/** Amounts match within ₱1.00 (OCR rounding / fees noise). */
+/** Human-readable reason when proof amount does not match owed total. */
+export function paymentProofAmountError(
+  expected: number,
+  actual: number,
+  tolerance = 1
+): string | null {
+  const expectedD = d(expected);
+  const actualD = d(actual);
+  if (actualD.gt(expectedD.plus(tolerance))) {
+    return `Amount ₱${moneyNumber(actual).toFixed(2)} is more than what you owe (₱${moneyNumber(expected).toFixed(2)})`;
+  }
+  if (actualD.lt(expectedD.minus(tolerance))) {
+    return `Amount ₱${moneyNumber(actual).toFixed(2)} does not match what you owe (₱${moneyNumber(expected).toFixed(2)})`;
+  }
+  return null;
+}
+
+/** Amounts match within ₱1.00 (OCR rounding / fees noise). Overpayment is rejected. */
 export function amountsMatch(
   expected: number,
   actual: number,
   tolerance = 1
 ): boolean {
-  return d(expected).sub(actual).abs().lte(tolerance);
+  return paymentProofAmountError(expected, actual, tolerance) == null;
 }

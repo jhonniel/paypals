@@ -109,7 +109,7 @@ export function sumPalPartyTotals(rows: PalDebtPartyTotal[]): number {
   return moneyNumber(rows.reduce((sum, r) => sum + r.amount, 0));
 }
 
-async function getPalDebtorCreditBalance(
+export async function getPalDebtorCreditBalance(
   supabase: SupabaseClient,
   creditorId: string,
   debtorId: string

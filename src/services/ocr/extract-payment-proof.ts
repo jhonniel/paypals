@@ -1,6 +1,5 @@
 import type { OcrResult } from "@/services/ocr/types";
 import { parsePaymentProofText } from "@/lib/payment-proof";
-import { moneyNumber } from "@/lib/money";
 import { tryReceiptDate } from "@/lib/receipt-datetime";
 import { compressForOcr } from "@/services/ocr/preprocess-image";
 
@@ -17,7 +16,8 @@ type OcrSpaceResponse = {
 export async function extractPaymentProofFields(
   buffer: Buffer,
   mimeType: string,
-  fileName?: string
+  fileName?: string,
+  expectedAmount?: number | null
 ): Promise<{
   amount: number | null;
   date: string | null;
@@ -37,7 +37,7 @@ export async function extractPaymentProofFields(
       mimeType,
       fileName
     );
-    return fieldsFromOcrResult(result);
+    return fieldsFromOcrResult(result, expectedAmount);
   }
 
   const compressed = await compressForOcr(buffer, mimeType);
@@ -73,7 +73,7 @@ export async function extractPaymentProofFields(
       .trim();
     if (!text) continue;
 
-    const parsed = parsePaymentProofText(text);
+    const parsed = parsePaymentProofText(text, expectedAmount);
     return {
       amount: parsed.amount,
       date: parsed.date,
@@ -87,26 +87,22 @@ export async function extractPaymentProofFields(
   throw new Error(lastError);
 }
 
-function fieldsFromOcrResult(result: OcrResult) {
-  const textParts = [
-    result.merchant,
-    result.date,
-    result.total != null ? `Amount PHP ${result.total}` : null,
-    ...result.items.map((i) => `${i.name} ${i.totalPrice}`),
-    typeof result.raw === "object" && result.raw && "ParsedResults" in (result.raw as object)
-      ? ""
-      : JSON.stringify(result.raw ?? {}),
-  ];
-  // Pull ParsedText if present in raw
+function fieldsFromOcrResult(result: OcrResult, expectedAmount?: number | null) {
   const raw = result.raw as OcrSpaceResponse | null;
   const parsedText = (raw?.ParsedResults ?? [])
     .map((r) => r.ParsedText ?? "")
     .join("\n");
-  const text = [parsedText, ...textParts].filter(Boolean).join("\n");
-  const parsed = parsePaymentProofText(text);
-  const amount = result.total != null ? moneyNumber(result.total) : parsed.amount;
+  const textParts = [
+    parsedText,
+    result.merchant,
+    result.date,
+    ...result.items.map((i) => `${i.name} ${i.totalPrice}`),
+  ];
+  const text = textParts.filter(Boolean).join("\n");
+  const parsed = parsePaymentProofText(text, expectedAmount);
+  const amount = parsed.amount;
   const date =
-    (result.date ? tryReceiptDate(result.date) : null) ?? parsed.date;
+    parsed.date ?? (result.date ? tryReceiptDate(result.date) : null);
   return {
     amount,
     date,
