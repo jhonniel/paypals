@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, notFound, fail, fromZod, serverError } from "@/lib/api";
 import { applyPalReceivedPayment, palDebtRemaining, recalculatePalDebtorAllocations } from "@/lib/pal-debt-balance";
+import { restoreGroupMemberFromPalDebt } from "@/lib/move-group-to-pal-debt";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -101,15 +102,47 @@ export async function DELETE(_request: Request, { params }: Params) {
     const { supabase, user } = auth;
     const { id } = await params;
 
-    const { data: existing, error: loadErr } = await supabase
+    let { data: existing, error: loadErr } = await supabase
       .from("pal_debts")
-      .select("debtor_id")
+      .select("id, debtor_id, creditor_id, source_group_id, source_member_id")
       .eq("id", id)
       .eq("creditor_id", user.id)
       .maybeSingle();
 
+    if (
+      loadErr &&
+      /source_group_id|source_member_id|column/i.test(loadErr.message)
+    ) {
+      const fallback = await supabase
+        .from("pal_debts")
+        .select("id, debtor_id, creditor_id")
+        .eq("id", id)
+        .eq("creditor_id", user.id)
+        .maybeSingle();
+      loadErr = fallback.error;
+      existing = fallback.data
+        ? { ...fallback.data, source_group_id: null, source_member_id: null }
+        : null;
+    }
+
     if (loadErr) return fail(loadErr.message, 400);
     if (!existing) return notFound("Record not found");
+
+    let groupRestore: Awaited<ReturnType<typeof restoreGroupMemberFromPalDebt>> | null =
+      null;
+    try {
+      groupRestore = await restoreGroupMemberFromPalDebt(supabase, user.id, {
+        id: existing.id,
+        creditor_id: existing.creditor_id as string,
+        source_group_id: existing.source_group_id as string | null | undefined,
+        source_member_id: existing.source_member_id as string | null | undefined,
+      });
+    } catch (e) {
+      return fail(
+        e instanceof Error ? e.message : "Could not restore group balance",
+        400
+      );
+    }
 
     const { error } = await supabase
       .from("pal_debts")
@@ -125,7 +158,13 @@ export async function DELETE(_request: Request, { params }: Params) {
         user.id,
         existing.debtor_id as string
       );
-      return ok({ deleted: true, open_remaining: openRemaining });
+      return ok({
+        deleted: true,
+        open_remaining: openRemaining,
+        group_restored: groupRestore?.restored ?? false,
+        group_id: groupRestore?.group_id ?? null,
+        member_id: groupRestore?.member_id ?? null,
+      });
     } catch (e) {
       return fail(e instanceof Error ? e.message : "Deleted but could not rebalance", 400);
     }

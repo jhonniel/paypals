@@ -690,11 +690,27 @@ export function PalOwesMePageView({
     setBusyId(debt.id);
     try {
       const res = await fetch(`/api/pal-debts/${debt.id}`, { method: "DELETE" });
-      const parsed = await readApiJson(res);
+      const parsed = await readApiJson<{
+        data?: {
+          group_restored?: boolean;
+          group_id?: string | null;
+        };
+      }>(res);
       if (!parsed.ok) throw new Error(parsed.message);
-      toast.success("Lent record removed");
+      toast.success(
+        parsed.data?.data?.group_restored
+          ? "Removed from Pal owes me — balance restored in the group"
+          : "Lent record removed"
+      );
       setDeleteConfirm(null);
       await qc.invalidateQueries({ queryKey: ["pal-debts"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+      await qc.invalidateQueries({ queryKey: ["groups"] });
+      if (parsed.data?.data?.group_id) {
+        await qc.invalidateQueries({
+          queryKey: ["group", parsed.data.data.group_id],
+        });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -988,7 +1004,11 @@ export function PalOwesMePageView({
       {deleteConfirm && (
         <ConfirmModal
           title="Remove lent record?"
-          description="This deletes the lent entry. Any received payments will be reapplied to remaining records."
+          description={
+            deleteConfirm.description?.startsWith("From group:")
+              ? "This removes the Pal owes me entry and restores the member's balance in the group (they will no longer show as moved)."
+              : "This deletes the lent entry. Any received payments will be reapplied to remaining records."
+          }
           highlight={
             <p className="text-sm font-medium">
               {money(Number(deleteConfirm.amount), deleteConfirm.currency)}

@@ -186,3 +186,95 @@ export function getPalDebtWriter(
   if (process.env.SUPABASE_SERVICE_ROLE_KEY) return createAdminClient();
   return null;
 }
+
+type MovedPalProofMeta = {
+  source?: string;
+  pal_debt_id?: string;
+  moved_by?: string;
+};
+
+async function findMovedGroupProof(
+  supabase: SupabaseClient,
+  palDebtId: string,
+  sourceGroupId?: string | null,
+  sourceMemberId?: string | null
+) {
+  if (sourceGroupId && sourceMemberId) {
+    const { data: proof } = await supabase
+      .from("group_payment_proofs")
+      .select("group_id, from_member_id, ocr_raw")
+      .eq("group_id", sourceGroupId)
+      .eq("from_member_id", sourceMemberId)
+      .maybeSingle();
+
+    if (!proof) return null;
+    const meta = (proof.ocr_raw ?? {}) as MovedPalProofMeta;
+    if (meta.source !== "moved_to_pal") return null;
+    if (meta.pal_debt_id && meta.pal_debt_id !== palDebtId) return null;
+    return proof;
+  }
+
+  const { data: proofs } = await supabase
+    .from("group_payment_proofs")
+    .select("group_id, from_member_id, ocr_raw")
+    .eq("status", "paid")
+    .contains("ocr_raw", { source: "moved_to_pal", pal_debt_id: palDebtId });
+
+  const proof = proofs?.[0];
+  if (!proof) return null;
+  const meta = (proof.ocr_raw ?? {}) as MovedPalProofMeta;
+  if (meta.source !== "moved_to_pal") return null;
+  if (meta.pal_debt_id && meta.pal_debt_id !== palDebtId) return null;
+  return proof;
+}
+
+/** Clear group "Moved to Pal owes me" when the linked pal debt is deleted. */
+export async function restoreGroupMemberFromPalDebt(
+  supabase: SupabaseClient,
+  userId: string,
+  palDebt: {
+    id: string;
+    creditor_id: string;
+    source_group_id?: string | null;
+    source_member_id?: string | null;
+  }
+): Promise<{ restored: boolean; group_id?: string; member_id?: string }> {
+  if (palDebt.creditor_id !== userId) {
+    throw new Error("Only the creditor can restore the group balance");
+  }
+
+  const proof = await findMovedGroupProof(
+    supabase,
+    palDebt.id,
+    palDebt.source_group_id,
+    palDebt.source_member_id
+  );
+
+  if (!proof) {
+    return { restored: false };
+  }
+
+  const groupId = proof.group_id as string;
+  const memberId = proof.from_member_id as string;
+
+  let deleteClient = supabase;
+  const { error: deleteErr } = await deleteClient
+    .from("group_payment_proofs")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("from_member_id", memberId);
+
+  if (deleteErr && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    deleteClient = createAdminClient();
+    const { error: adminErr } = await deleteClient
+      .from("group_payment_proofs")
+      .delete()
+      .eq("group_id", groupId)
+      .eq("from_member_id", memberId);
+    if (adminErr) throw new Error(adminErr.message);
+  } else if (deleteErr) {
+    throw new Error(deleteErr.message);
+  }
+
+  return { restored: true, group_id: groupId, member_id: memberId };
+}
