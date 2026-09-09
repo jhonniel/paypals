@@ -23,6 +23,7 @@ import {
   Check,
   HandCoins,
   RotateCw,
+  Undo2,
   MoreHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -770,6 +771,7 @@ export function GroupDetailView({
   const [uploadingProof, setUploadingProof] = useState(false);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [movingToPal, setMovingToPal] = useState(false);
+  const [revertingMemberId, setRevertingMemberId] = useState<string | null>(null);
   const [moveToPalOpen, setMoveToPalOpen] = useState(false);
   const [selectedMoveMemberIds, setSelectedMoveMemberIds] = useState<string[]>(
     []
@@ -779,6 +781,11 @@ export function GroupDetailView({
     name: string;
     amountLabel: string;
     paid: boolean;
+  } | null>(null);
+  const [revertConfirm, setRevertConfirm] = useState<{
+    memberId: string;
+    name: string;
+    amountLabel: string;
   } | null>(null);
   const [flippedMembers, setFlippedMembers] = useState<Set<string>>(new Set());
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -1167,6 +1174,29 @@ export function GroupDetailView({
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
       setMovingToPal(false);
+    }
+  }
+
+  async function revertMemberFromPalDebt(memberId: string) {
+    setRevertingMemberId(memberId);
+    try {
+      const res = await fetch(`/api/groups/${groupId}/revert-from-pal-debt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message ?? "Failed");
+      toast.success("Reverted — they owe in this group again");
+      setRevertConfirm(null);
+      await qc.invalidateQueries({ queryKey: ["group", groupId] });
+      await qc.invalidateQueries({ queryKey: ["pal-debts"] });
+      await qc.invalidateQueries({ queryKey: ["dashboard"] });
+      await qc.invalidateQueries({ queryKey: ["groups"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setRevertingMemberId(null);
     }
   }
 
@@ -1565,9 +1595,43 @@ export function GroupDetailView({
                             ) : null}
                           </span>
                           {isMovedToPal ? (
-                            <span className="text-[10px] text-muted-foreground">
-                              Balance tracked outside this group
-                            </span>
+                            <>
+                              <span className="text-[10px] text-muted-foreground">
+                                Balance tracked outside this group
+                              </span>
+                              {canMoveToPal ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="mt-1.5 h-7 gap-1.5 border-violet-500/30 px-2.5 text-[11px] text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+                                  disabled={
+                                    busy ||
+                                    movingToPal ||
+                                    revertingMemberId === m.id
+                                  }
+                                  onClick={() =>
+                                    setRevertConfirm({
+                                      memberId: m.id,
+                                      name: label,
+                                      amountLabel: money(
+                                        proof?.expected_amount ?? owesTotal,
+                                        payCurrency
+                                      ),
+                                    })
+                                  }
+                                >
+                                  {revertingMemberId === m.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Undo2 className="h-3.5 w-3.5" />
+                                      Revert to group
+                                    </>
+                                  )}
+                                </Button>
+                              ) : null}
+                            </>
                           ) : null}
                         </span>
                       ) : (
@@ -1999,6 +2063,28 @@ export function GroupDetailView({
           onClose={() => {
             if (markingPaidId) return;
             setMarkPaidConfirm(null);
+          }}
+        />
+      )}
+
+      {revertConfirm && (
+        <ConfirmModal
+          title="Revert to group?"
+          description="This removes the balance from Pal owes me and marks them as owing in this group again."
+          highlight={
+            <p className="text-sm font-medium">
+              {revertConfirm.name} · {revertConfirm.amountLabel}
+            </p>
+          }
+          highlightClassName="border-violet-500/30 bg-violet-500/5"
+          confirmLabel="Revert to group"
+          busy={revertingMemberId === revertConfirm.memberId}
+          onConfirm={() =>
+            void revertMemberFromPalDebt(revertConfirm.memberId)
+          }
+          onClose={() => {
+            if (revertingMemberId) return;
+            setRevertConfirm(null);
           }}
         />
       )}

@@ -3,6 +3,7 @@ import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, notFound, fail, fromZod, serverError } from "@/lib/api";
 import { itemClaimSlots } from "@/lib/splits";
 import { autoSettleBillPayerAfterClaim } from "@/lib/auto-settle-bill-payer";
+import { syncMovedToPalDebtsForGroup } from "@/lib/move-group-to-pal-debt";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -321,6 +322,14 @@ async function finalizeClaim(
       receiptRow.group_id,
       myMemberId
     );
+    try {
+      await syncMovedToPalDebtsForGroup(supabase, receiptRow.group_id, {
+        memberIds: [myMemberId],
+        actorUserId: userId,
+      });
+    } catch (e) {
+      console.error("syncMovedToPalDebtsForGroup after receipt claim", e);
+    }
   }
 
   return ok({ confirmed: true, claimed: mine.length });

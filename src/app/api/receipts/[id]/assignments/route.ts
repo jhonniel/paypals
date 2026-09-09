@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, fail, fromZod, serverError, notFound } from "@/lib/api";
 import { computeSplitBalances, type AssignmentInput, type ItemSplitInput } from "@/lib/splits";
+import { syncMovedToPalDebtsForGroup } from "@/lib/move-group-to-pal-debt";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -212,6 +213,17 @@ export async function PUT(request: Request, { params }: Params) {
         .update({ status: "members_assigned" })
         .eq("id", id);
 
+      if (receipt.group_id) {
+        try {
+          await syncMovedToPalDebtsForGroup(supabase, receipt.group_id as string, {
+            memberIds: [myMemberId],
+            actorUserId: user.id,
+          });
+        } catch (e) {
+          console.error("syncMovedToPalDebtsForGroup after member claim", e);
+        }
+      }
+
       return ok({ saved: true, claimed: true });
     }
 
@@ -297,6 +309,14 @@ export async function PUT(request: Request, { params }: Params) {
 
       if (notifications.length) {
         await supabase.from("notifications").insert(notifications);
+      }
+
+      try {
+        await syncMovedToPalDebtsForGroup(supabase, groupId, {
+          actorUserId: user.id,
+        });
+      } catch (e) {
+        console.error("syncMovedToPalDebtsForGroup after assignments save", e);
       }
     }
 

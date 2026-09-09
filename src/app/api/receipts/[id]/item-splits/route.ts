@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { ok, unauthorized, notFound, fail, fromZod, serverError } from "@/lib/api";
+import { syncMovedToPalDebtsForGroup } from "@/lib/move-group-to-pal-debt";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -91,6 +92,16 @@ export async function PUT(request: Request, { params }: Params) {
             );
           if (insErr) return fail(insErr.message, 400);
         }
+      }
+    }
+
+    if (receipt.group_id) {
+      try {
+        await syncMovedToPalDebtsForGroup(supabase, receipt.group_id as string, {
+          actorUserId: user.id,
+        });
+      } catch (e) {
+        console.error("syncMovedToPalDebtsForGroup after item split update", e);
       }
     }
 

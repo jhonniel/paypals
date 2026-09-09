@@ -9,6 +9,7 @@ import {
   sumDiscountAmount,
 } from "@/lib/receipt-discounts";
 import { syncReceiptItems } from "@/lib/sync-receipt-items";
+import { syncMovedToPalDebtsForGroup } from "@/lib/move-group-to-pal-debt";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -347,6 +348,26 @@ export async function PATCH(request: Request, { params }: Params) {
           })),
       Number(receipt.discount)
     );
+
+    const groupId =
+      (receipt.group_id as string | null) ?? (existing.group_id as string | null);
+    const affectsMovedPalTotals =
+      items !== undefined ||
+      fields.tax !== undefined ||
+      fields.discount !== undefined ||
+      discounts !== undefined ||
+      fields.service_charge !== undefined ||
+      fields.tip !== undefined;
+
+    if (groupId && affectsMovedPalTotals) {
+      try {
+        await syncMovedToPalDebtsForGroup(supabase, groupId, {
+          actorUserId: user.id,
+        });
+      } catch (e) {
+        console.error("syncMovedToPalDebtsForGroup after receipt patch", e);
+      }
+    }
 
     return ok({ receipt, items: savedItems ?? [], discounts: normalizedDiscounts });
   } catch (error) {
