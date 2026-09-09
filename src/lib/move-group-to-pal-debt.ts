@@ -328,14 +328,12 @@ export async function revertGroupMemberFromPalDebt(
   let debtorId: string | null = null;
 
   async function loadPalDebtById(id: string) {
-    let query = writer
+    let { data, error } = await writer
       .from("pal_debts")
       .select("id, debtor_id")
       .eq("id", id)
       .eq("creditor_id", creditorId)
       .maybeSingle();
-
-    let { data, error } = await query;
     if (
       error &&
       /source_group_id|source_member_id|column/i.test(error.message)
