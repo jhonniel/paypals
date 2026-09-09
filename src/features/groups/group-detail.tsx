@@ -132,6 +132,7 @@ type GroupDetail = {
   must_claim_before_view?: boolean;
   my_role: string | null;
   my_member_id?: string | null;
+  bill_payer_member_id?: string | null;
   members_visible_to_group?: boolean;
   can_manage_members?: boolean;
   my_payment?: {
@@ -810,17 +811,18 @@ export function GroupDetailView({
   }
 
   const canManage =
+    Boolean(data?.can_manage_members) ||
     data?.my_role === "owner" ||
     data?.my_role === "admin" ||
     data?.group.created_by === currentUserId;
   const isCreator =
     data?.group.created_by === currentUserId || data?.my_role === "owner";
   const isOwner = data?.my_role === "owner";
-  const myMemberPay = data?.member_payments?.find(
-    (p) => p.member_id === data?.my_member_id
-  );
-  const isBillPayer = Boolean(myMemberPay?.is_bill_payer);
+  const isBillPayer =
+    Boolean(data?.my_member_id) &&
+    data?.my_member_id === data?.bill_payer_member_id;
   const canMoveToPal = canManage || isBillPayer;
+  const canRevertMovedToPal = canMoveToPal;
   const groupUnclaimedSummary = canManage
     ? (data?.receipts ?? []).reduce(
         (acc, receipt) => {
@@ -1599,7 +1601,7 @@ export function GroupDetailView({
                               <span className="text-[10px] text-muted-foreground">
                                 Balance tracked outside this group
                               </span>
-                              {canMoveToPal ? (
+                              {canRevertMovedToPal ? (
                                 <Button
                                   type="button"
                                   size="sm"
@@ -1630,7 +1632,11 @@ export function GroupDetailView({
                                     </>
                                   )}
                                 </Button>
-                              ) : null}
+                              ) : (
+                                <span className="mt-1 text-[10px] text-muted-foreground">
+                                  Only the group owner or bill payer can revert
+                                </span>
+                              )}
                             </>
                           ) : null}
                         </span>

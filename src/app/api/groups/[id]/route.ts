@@ -712,6 +712,11 @@ export async function GET(req: Request, { params }: Params) {
       }
     }
 
+    const billPayerMemberId =
+      (receipts ?? []).find(
+        (r) => (r as { paid_by_member_id?: string | null }).paid_by_member_id
+      )?.paid_by_member_id ?? defaultPayerMemberId;
+
     return ok({
       group: { ...group, invite_code: inviteCode },
       members: visibleMembers,
@@ -719,6 +724,7 @@ export async function GET(req: Request, { params }: Params) {
       receipts: receiptsForClient,
       my_role: my?.role ?? null,
       my_member_id: my?.id ?? null,
+      bill_payer_member_id: billPayerMemberId,
       my_payment,
       member_payments: visiblePayments,
       where_to_pay,
