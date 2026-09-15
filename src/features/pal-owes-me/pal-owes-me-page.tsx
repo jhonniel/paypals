@@ -1969,6 +1969,7 @@ function AddDebtModal({
   onSaved: () => void | Promise<void>;
   onPalPicked?: (person: PersonHit) => void;
 }) {
+  const qc = useQueryClient();
   const [mode, setMode] = useState<"friends" | "search" | "guest">("friends");
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<PersonHit[]>([]);
@@ -1980,6 +1981,7 @@ function AddDebtModal({
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [createdInvite, setCreatedInvite] = useState<{
+    debtId: string;
     token: string;
     name: string;
     amount: number;
@@ -2095,12 +2097,13 @@ function AddDebtModal({
 
       if (isGuest && parsed.data?.data?.invite_token) {
         setCreatedInvite({
+          debtId: parsed.data.data.id,
           token: parsed.data.data.invite_token,
           name: guestName.trim(),
           amount: parsedAmount,
           currency: parsed.data.data.currency ?? "PHP",
         });
-        await onSaved();
+        await qc.invalidateQueries({ queryKey: ["pal-debts"] });
         return;
       }
 
@@ -2128,7 +2131,7 @@ function AddDebtModal({
             </h2>
             <p className="text-xs text-muted-foreground">
               {pickOnly
-                ? "Pick someone to track — record amounts from their profile."
+                ? "Pick a friend, search a user, or add someone without an account yet."
                 : "Who owes you and how much?"}
             </p>
           </div>
@@ -2179,7 +2182,28 @@ function AddDebtModal({
                   </Button>
                 ) : null}
               </div>
-              <Button type="button" variant="outline" className="w-full" onClick={requestClose}>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  void (async () => {
+                    if (pickOnly && createdInvite) {
+                      onPalPicked?.({
+                        id: pendingPalCounterpartyId(createdInvite.debtId),
+                        full_name: createdInvite.name,
+                        username: null,
+                        avatar_url: null,
+                        email: guestEmail.trim() || null,
+                      });
+                      requestClose();
+                      return;
+                    }
+                    await onSaved();
+                    requestClose();
+                  })();
+                }}
+              >
                 Done
               </Button>
             </div>
@@ -2202,19 +2226,17 @@ function AddDebtModal({
             >
               Search user
             </Button>
-            {!pickOnly ? (
-              <Button
-                type="button"
-                size="sm"
-                variant={mode === "guest" ? "default" : "outline"}
-                onClick={() => {
-                  setMode("guest");
-                  setSelected(null);
-                }}
-              >
-                No account yet
-              </Button>
-            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant={mode === "guest" ? "default" : "outline"}
+              onClick={() => {
+                setMode("guest");
+                setSelected(null);
+              }}
+            >
+              No account yet
+            </Button>
           </div>
 
           {!pickOnly && selected ? (
@@ -2246,7 +2268,7 @@ function AddDebtModal({
                 Change
               </Button>
             </div>
-          ) : mode === "guest" && !pickOnly ? (
+          ) : mode === "guest" ? (
             <form onSubmit={(e) => void submit(e)} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="guest-name">Their name</Label>
@@ -2308,7 +2330,7 @@ function AddDebtModal({
                   ) : (
                     <>
                       <Plus className="h-4 w-4" />
-                      Record & get link
+                      {pickOnly ? "Add & get link" : "Record & get link"}
                     </>
                   )}
                 </Button>
