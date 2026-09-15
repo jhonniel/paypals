@@ -35,6 +35,11 @@ import { readApiJson } from "@/lib/api-client";
 import { prepareImageFileForUpload } from "@/lib/convert-heic-client";
 import { palDebtRemaining, palDebtorNetBalance } from "@/lib/pal-debt-balance";
 import {
+  isPendingPalCounterpartyId,
+  palDebtInviteUrl,
+  pendingPalCounterpartyId,
+} from "@/lib/pal-debt-invite";
+import {
   normalizePaymentMethods,
   paymentMethodDisplayLabel,
   toSharedPaymentMethods,
@@ -52,7 +57,7 @@ type DebtorProfile = {
 type PalDebt = {
   id: string;
   creditor_id: string;
-  debtor_id: string;
+  debtor_id: string | null;
   amount: number;
   amount_received?: number | null;
   currency: string;
@@ -61,6 +66,10 @@ type PalDebt = {
   created_at: string;
   updated_at: string;
   settled_at: string | null;
+  pending_debtor_name?: string | null;
+  pending_debtor_email?: string | null;
+  invite_token?: string | null;
+  claimed_at?: string | null;
   debtor: DebtorProfile | DebtorProfile[] | null;
   creditor?: (DebtorProfile & { payment_methods?: unknown }) | (DebtorProfile & { payment_methods?: unknown })[] | null;
 };
@@ -153,11 +162,32 @@ function normalizeCreditor(debt: PalDebt): DebtorProfile | null {
 }
 
 function counterpartyId(debt: PalDebt, perspective: PalPerspective): string {
-  return perspective === "creditor" ? debt.debtor_id : debt.creditor_id;
+  if (perspective === "creditor") {
+    if (debt.debtor_id) return debt.debtor_id;
+    return pendingPalCounterpartyId(debt.id);
+  }
+  return debt.creditor_id;
+}
+
+function pendingCounterpartyProfile(debt: PalDebt): DebtorProfile {
+  return {
+    id: pendingPalCounterpartyId(debt.id),
+    full_name: debt.pending_debtor_name?.trim() || "Someone",
+    username: null,
+    avatar_url: null,
+    email: debt.pending_debtor_email ?? null,
+  };
 }
 
 function counterpartyFromDebt(debt: PalDebt, perspective: PalPerspective): DebtorProfile | null {
+  if (perspective === "creditor" && !debt.debtor_id) {
+    return pendingCounterpartyProfile(debt);
+  }
   return perspective === "creditor" ? normalizeDebtor(debt) : normalizeCreditor(debt);
+}
+
+function isPendingPalDebt(debt: PalDebt) {
+  return !debt.debtor_id && Boolean(debt.invite_token);
 }
 
 type HistoryEntry = {
@@ -890,8 +920,9 @@ export function PalOwesMePageView({
             const cpId =
               group.counterparty?.id ??
               (group.debts[0] ? counterpartyId(group.debts[0], perspective) : undefined);
+            const hasUnclaimed = group.debts.some((d) => isPendingPalDebt(d));
             return (
-              <li key={cpId}>
+              <li key={cpId ?? group.debts[0]?.id}>
                 <button
                   type="button"
                   onClick={() => {
@@ -921,6 +952,10 @@ export function PalOwesMePageView({
                         {group.counterparty?.username ? (
                           <p className="truncate text-[9px] text-muted-foreground">
                             @{group.counterparty.username}
+                          </p>
+                        ) : hasUnclaimed ? (
+                          <p className="truncate text-[9px] text-violet-600 dark:text-violet-300">
+                            Awaiting claim
                           </p>
                         ) : null}
                       </div>
@@ -1416,6 +1451,19 @@ function DebtorDetailModal({
     setReceiveOpen(false);
   }, [counterpartyId]);
 
+  const isPendingCounterparty = isPendingPalCounterpartyId(counterpartyId);
+  const pendingInviteDebts = group.debts.filter((d) => isPendingPalDebt(d));
+  const activeInviteToken = pendingInviteDebts.find((d) => d.invite_token)?.invite_token;
+
+  async function copyInviteLink(token: string) {
+    try {
+      await navigator.clipboard.writeText(palDebtInviteUrl(token));
+      toast.success("Claim link copied");
+    } catch {
+      toast.error("Could not copy link");
+    }
+  }
+
   async function submitRecord(e: React.FormEvent) {
     e.preventDefault();
     const parsedAmount = Number(amount);
@@ -1425,14 +1473,22 @@ function DebtorDetailModal({
     }
     setRecording(true);
     try {
+      const body = isPendingCounterparty
+        ? {
+            pending_name: group.counterparty?.full_name?.trim() || "Someone",
+            pending_email: group.counterparty?.email?.trim() || null,
+            amount: parsedAmount,
+            description: description.trim() || null,
+          }
+        : {
+            debtor_id: counterpartyId,
+            amount: parsedAmount,
+            description: description.trim() || null,
+          };
       const res = await fetch("/api/pal-debts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          debtor_id: counterpartyId,
-          amount: parsedAmount,
-          description: description.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
       const parsed = await readApiJson(res);
       if (!parsed.ok) throw new Error(parsed.message);
@@ -1471,6 +1527,10 @@ function DebtorDetailModal({
                 </h2>
                 {group.counterparty?.username ? (
                   <p className="text-xs text-muted-foreground">@{group.counterparty.username}</p>
+                ) : isPendingCounterparty ? (
+                  <p className="text-xs text-violet-600 dark:text-violet-300">
+                    No account yet — share claim link
+                  </p>
                 ) : null}
               </div>
             </div>
@@ -1486,6 +1546,42 @@ function DebtorDetailModal({
               <X className="h-5 w-5" />
             </Button>
           </div>
+
+          {isCreditor && isPendingCounterparty && activeInviteToken ? (
+            <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-2.5">
+              <p className="text-xs font-medium text-violet-800 dark:text-violet-200">
+                Share this link so they can claim the debt
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 gap-1.5 border-violet-500/30"
+                  onClick={() => void copyInviteLink(activeInviteToken)}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy link
+                </Button>
+                {group.counterparty?.email ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 border-violet-500/30"
+                    asChild
+                  >
+                    <a
+                      href={`mailto:${encodeURIComponent(group.counterparty.email)}?subject=${encodeURIComponent("Claim your debt on Paypals")}&body=${encodeURIComponent(`Hi,\n\nI recorded a debt on Paypals. Claim it here:\n${palDebtInviteUrl(activeInviteToken)}\n`)}`}
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      Email
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {isCreditor ? (
             <div className="mt-3 flex gap-2">
@@ -1508,7 +1604,12 @@ function DebtorDetailModal({
                 size="sm"
                 variant={receiveOpen ? "secondary" : "outline"}
                 className="flex-1 border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
-                disabled={recording}
+                disabled={recording || isPendingCounterparty}
+                title={
+                  isPendingCounterparty
+                    ? "They must claim the debt before you can record payments"
+                    : undefined
+                }
                 onClick={() => {
                   setRecordOpen(false);
                   setReceiveOpen((v) => !v);
@@ -1868,14 +1969,22 @@ function AddDebtModal({
   onSaved: () => void | Promise<void>;
   onPalPicked?: (person: PersonHit) => void;
 }) {
-  const [mode, setMode] = useState<"friends" | "search">("friends");
+  const [mode, setMode] = useState<"friends" | "search" | "guest">("friends");
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<PersonHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<PersonHit | null>(null);
+  const [guestName, setGuestName] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
+  const [createdInvite, setCreatedInvite] = useState<{
+    token: string;
+    name: string;
+    amount: number;
+    currency: string;
+  } | null>(null);
 
   const { data: friends, isLoading: friendsLoading } = useQuery({
     queryKey: ["friends"],
@@ -1931,30 +2040,70 @@ function AddDebtModal({
     setSelected(person);
   }
 
+  async function copyCreatedInvite() {
+    if (!createdInvite) return;
+    try {
+      await navigator.clipboard.writeText(palDebtInviteUrl(createdInvite.token));
+      toast.success("Claim link copied");
+    } catch {
+      toast.error("Could not copy link");
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selected) {
-      toast.error("Pick who owes you");
-      return;
-    }
     const parsedAmount = Number(amount);
     if (!parsedAmount || parsedAmount <= 0) {
       toast.error("Enter a valid amount");
       return;
     }
+
+    const isGuest = mode === "guest";
+    if (isGuest) {
+      if (!guestName.trim()) {
+        toast.error("Enter their name");
+        return;
+      }
+    } else if (!selected) {
+      toast.error("Pick who owes you");
+      return;
+    }
+
     setBusy(true);
     try {
+      const body = isGuest
+        ? {
+            pending_name: guestName.trim(),
+            pending_email: guestEmail.trim() || null,
+            amount: parsedAmount,
+            description: description.trim() || null,
+          }
+        : {
+            debtor_id: selected!.id,
+            amount: parsedAmount,
+            description: description.trim() || null,
+          };
       const res = await fetch("/api/pal-debts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          debtor_id: selected.id,
-          amount: parsedAmount,
-          description: description.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
-      const parsed = await readApiJson(res);
+      const parsed = await readApiJson<{
+        data?: PalDebt & { invite_token?: string };
+      }>(res);
       if (!parsed.ok) throw new Error(parsed.message);
+
+      if (isGuest && parsed.data?.data?.invite_token) {
+        setCreatedInvite({
+          token: parsed.data.data.invite_token,
+          name: guestName.trim(),
+          amount: parsedAmount,
+          currency: parsed.data.data.currency ?? "PHP",
+        });
+        await onSaved();
+        return;
+      }
+
       toast.success("Debt recorded — use Received when they pay you back");
       await onSaved();
     } catch (err) {
@@ -1997,7 +2146,46 @@ function AddDebtModal({
         </div>
 
         <div className="space-y-4 p-4">
-          <div className="flex gap-2">
+          {createdInvite ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-center">
+                <p className="text-sm font-semibold text-violet-800 dark:text-violet-200">
+                  Debt recorded for {createdInvite.name}
+                </p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">
+                  {money(createdInvite.amount, createdInvite.currency)}
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Share this link so they can claim it after signing up
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  className="flex-1 gap-1.5"
+                  onClick={() => void copyCreatedInvite()}
+                >
+                  <Copy className="h-4 w-4" />
+                  Copy claim link
+                </Button>
+                {guestEmail.trim() ? (
+                  <Button type="button" variant="outline" className="gap-1.5" asChild>
+                    <a
+                      href={`mailto:${encodeURIComponent(guestEmail.trim())}?subject=${encodeURIComponent("Claim your debt on Paypals")}&body=${encodeURIComponent(`Hi ${createdInvite.name},\n\nI recorded a debt on Paypals. Claim it here:\n${palDebtInviteUrl(createdInvite.token)}\n`)}`}
+                    >
+                      <Mail className="h-4 w-4" />
+                      Email
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+              <Button type="button" variant="outline" className="w-full" onClick={requestClose}>
+                Done
+              </Button>
+            </div>
+          ) : (
+          <>
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
@@ -2014,6 +2202,19 @@ function AddDebtModal({
             >
               Search user
             </Button>
+            {!pickOnly ? (
+              <Button
+                type="button"
+                size="sm"
+                variant={mode === "guest" ? "default" : "outline"}
+                onClick={() => {
+                  setMode("guest");
+                  setSelected(null);
+                }}
+              >
+                No account yet
+              </Button>
+            ) : null}
           </div>
 
           {!pickOnly && selected ? (
@@ -2045,6 +2246,74 @@ function AddDebtModal({
                 Change
               </Button>
             </div>
+          ) : mode === "guest" && !pickOnly ? (
+            <form onSubmit={(e) => void submit(e)} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="guest-name">Their name</Label>
+                <Input
+                  id="guest-name"
+                  value={guestName}
+                  onChange={(e) => setGuestName(e.target.value)}
+                  placeholder="e.g. Alex"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="guest-email">Email (optional)</Label>
+                <Input
+                  id="guest-email"
+                  type="email"
+                  value={guestEmail}
+                  onChange={(e) => setGuestEmail(e.target.value)}
+                  placeholder="For sharing the claim link"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="guest-amount">Amount (PHP)</Label>
+                <Input
+                  id="guest-amount"
+                  type="text"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "" || /^\d*\.?\d*$/.test(raw)) setAmount(raw);
+                  }}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="guest-note">What for? (optional)</Label>
+                <Textarea
+                  id="guest-note"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                  placeholder="Lunch, ride share, borrowed cash…"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  disabled={busy}
+                  onClick={requestClose}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" className="flex-1" disabled={busy}>
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" />
+                      Record & get link
+                    </>
+                  )}
+                </Button>
+              </div>
+            </form>
           ) : mode === "friends" ? (
             <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-border p-2">
               {friendsLoading ? (
@@ -2195,6 +2464,8 @@ function AddDebtModal({
               </Button>
             </div>
           ) : null}
+          </>
+          )}
         </div>
         </>
       )}

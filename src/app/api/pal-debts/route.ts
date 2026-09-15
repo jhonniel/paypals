@@ -7,21 +7,33 @@ import {
   palDebtorNetBalance,
 } from "@/lib/pal-debt-balance";
 
-const createSchema = z.object({
-  debtor_id: z.string().uuid(),
-  amount: z.number().positive().max(999_999_999),
-  currency: z.string().length(3).optional(),
-  description: z.string().max(500).nullable().optional(),
-});
+const createSchema = z
+  .object({
+    debtor_id: z.string().uuid().optional(),
+    pending_name: z.string().trim().min(1).max(120).optional(),
+    pending_email: z.string().email().max(255).optional().nullable(),
+    amount: z.number().positive().max(999_999_999),
+    currency: z.string().length(3).optional(),
+    description: z.string().max(500).nullable().optional(),
+  })
+  .refine(
+    (data) =>
+      (Boolean(data.debtor_id) && !data.pending_name) ||
+      (Boolean(data.pending_name) && !data.debtor_id),
+    { message: "Provide debtor_id or pending_name, not both" }
+  );
+
+const pendingDebtFields =
+  "pending_debtor_name, pending_debtor_email, invite_token, claimed_at";
 
 const debtSelectCreditorWithReceived =
-  "id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, debtor:debtor_id(id, full_name, username, avatar_url, email)";
+  `id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, debtor:debtor_id(id, full_name, username, avatar_url, email)`;
 
 const debtSelectDebtorWithReceived =
   "id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, creditor:creditor_id(id, full_name, username, avatar_url, email, payment_methods)";
 
 const debtSelectCreditorLegacy =
-  "id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, debtor:debtor_id(id, full_name, username, avatar_url, email)";
+  `id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, debtor:debtor_id(id, full_name, username, avatar_url, email)`;
 
 const debtSelectDebtorLegacy =
   "id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, creditor:creditor_id(id, full_name, username, avatar_url, email)";
@@ -135,6 +147,15 @@ export async function GET(request: Request) {
     const counterpartyColumn =
       perspective === "creditor" ? "debtor_id" : "creditor_id";
 
+    function counterpartyKey(row: Record<string, unknown>): string {
+      const id = row[counterpartyColumn] as string | null | undefined;
+      if (id) return id;
+      if (perspective === "creditor" && !id) {
+        return `pending:${row.id as string}`;
+      }
+      return row.id as string;
+    }
+
     const creditByCounterparty = new Map<string, number>();
     for (const c of credits) {
       const key = c[counterpartyColumn] as string;
@@ -143,17 +164,14 @@ export async function GET(request: Request) {
 
     const openByCounterparty = new Map<string, number>();
     for (const d of openDebts) {
-      const counterpartyId = d[counterpartyColumn] as string;
+      const key = counterpartyKey(d);
       const remaining = palDebtRemaining({
         amount: Number(d.amount),
         amount_received: Number(d.amount_received ?? 0),
         status: String(d.status),
       });
       if (remaining <= 0) continue;
-      openByCounterparty.set(
-        counterpartyId,
-        (openByCounterparty.get(counterpartyId) ?? 0) + remaining
-      );
+      openByCounterparty.set(key, (openByCounterparty.get(key) ?? 0) + remaining);
     }
 
     let openTotal = 0;
@@ -204,21 +222,37 @@ export async function POST(request: Request) {
     const parsed = createSchema.safeParse(await request.json());
     if (!parsed.success) return fromZod(parsed.error);
 
-    const { debtor_id, amount, currency, description } = parsed.data;
-    if (debtor_id === user.id) return fail("You cannot record a debt to yourself", 400);
+    const { debtor_id, pending_name, pending_email, amount, currency, description } =
+      parsed.data;
 
-    const { data: debtor, error: debtorErr } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("id", debtor_id)
-      .maybeSingle();
+    const isPendingInvite = Boolean(pending_name);
+    if (debtor_id === user.id) {
+      return fail("You cannot record a debt to yourself", 400);
+    }
 
-    if (debtorErr) return fail(debtorErr.message, 400);
-    if (!debtor) return fail("User not found", 404);
+    if (!isPendingInvite && debtor_id) {
+      const { data: debtor, error: debtorErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", debtor_id)
+        .maybeSingle();
+
+      if (debtorErr) return fail(debtorErr.message, 400);
+      if (!debtor) return fail("User not found", 404);
+    }
+
+    const inviteToken = isPendingInvite
+      ? crypto.randomUUID().replace(/-/g, "")
+      : null;
 
     const insertRow = {
       creditor_id: user.id,
-      debtor_id,
+      debtor_id: isPendingInvite ? null : debtor_id!,
+      pending_debtor_name: isPendingInvite ? pending_name!.trim() : null,
+      pending_debtor_email: isPendingInvite
+        ? pending_email?.trim() || null
+        : null,
+      invite_token: inviteToken,
       amount,
       amount_received: 0,
       currency: (currency ?? "PHP").toUpperCase(),
@@ -233,8 +267,23 @@ export async function POST(request: Request) {
       .select(debtSelectCreditorWithReceived)
       .single();
 
-    if (error && /amount_received|column/i.test(error.message)) {
-      const { amount_received: _removed, ...legacyInsert } = insertRow;
+    if (
+      error &&
+      /amount_received|pending_debtor_name|invite_token|column/i.test(error.message)
+    ) {
+      const {
+        amount_received: _removed,
+        pending_debtor_name: _pn,
+        pending_debtor_email: _pe,
+        invite_token: _it,
+        ...legacyInsert
+      } = insertRow;
+      if (isPendingInvite) {
+        return fail(
+          "Pending pal debts require database migration 037_pal_debt_guest_invite.sql",
+          400
+        );
+      }
       const legacy = await supabase
         .from("pal_debts")
         .insert(legacyInsert)
@@ -242,7 +291,7 @@ export async function POST(request: Request) {
         .single();
       if (legacy.error) return fail(legacy.error.message, 400);
       try {
-        await applyPalDebtorCredit(supabase, user.id, debtor_id);
+        await applyPalDebtorCredit(supabase, user.id, debtor_id!);
       } catch (e) {
         console.error("applyPalDebtorCredit after lent insert", e);
       }
@@ -251,13 +300,19 @@ export async function POST(request: Request) {
 
     if (error) return fail(error.message, 400);
 
-    try {
-      await applyPalDebtorCredit(supabase, user.id, debtor_id);
-    } catch (e) {
-      console.error("applyPalDebtorCredit after lent insert", e);
+    if (!isPendingInvite && debtor_id) {
+      try {
+        await applyPalDebtorCredit(supabase, user.id, debtor_id);
+      } catch (e) {
+        console.error("applyPalDebtorCredit after lent insert", e);
+      }
     }
 
-    return created(normalizeDebtRows([data as Record<string, unknown>])[0]);
+    const row = normalizeDebtRows([data as Record<string, unknown>])[0];
+    return created({
+      ...row,
+      ...(inviteToken ? { invite_token: inviteToken } : {}),
+    });
   } catch (e) {
     console.error(e);
     return serverError();
