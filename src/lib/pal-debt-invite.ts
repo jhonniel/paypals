@@ -10,10 +10,16 @@ export function palDebtInviteUrl(token: string, origin?: string) {
   return `${base}${palDebtInvitePath(token)}`;
 }
 
+/** Creditor recorded debt; debtor not linked yet. */
 export function pendingPalCounterpartyId(debtId: string) {
   return `pending:${debtId}`;
 }
 
+/** Debtor recorded debt; creditor not linked yet. */
+export function pendingCreditorCounterpartyId(debtId: string) {
+  return `pending-creditor:${debtId}`;
+}
+
 export function isPendingPalCounterpartyId(id: string) {
-  return id.startsWith("pending:");
+  return id.startsWith("pending:") || id.startsWith("pending-creditor:");
 }

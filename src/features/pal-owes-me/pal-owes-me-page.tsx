@@ -37,6 +37,7 @@ import { palDebtRemaining, palDebtorNetBalance } from "@/lib/pal-debt-balance";
 import {
   isPendingPalCounterpartyId,
   palDebtInviteUrl,
+  pendingCreditorCounterpartyId,
   pendingPalCounterpartyId,
 } from "@/lib/pal-debt-invite";
 import {
@@ -68,6 +69,8 @@ type PalDebt = {
   settled_at: string | null;
   pending_debtor_name?: string | null;
   pending_debtor_email?: string | null;
+  pending_creditor_name?: string | null;
+  pending_creditor_email?: string | null;
   invite_token?: string | null;
   claimed_at?: string | null;
   debtor: DebtorProfile | DebtorProfile[] | null;
@@ -166,7 +169,8 @@ function counterpartyId(debt: PalDebt, perspective: PalPerspective): string {
     if (debt.debtor_id) return debt.debtor_id;
     return pendingPalCounterpartyId(debt.id);
   }
-  return debt.creditor_id;
+  if (debt.creditor_id) return debt.creditor_id;
+  return pendingCreditorCounterpartyId(debt.id);
 }
 
 function pendingCounterpartyProfile(debt: PalDebt): DebtorProfile {
@@ -179,15 +183,28 @@ function pendingCounterpartyProfile(debt: PalDebt): DebtorProfile {
   };
 }
 
+function pendingCreditorProfile(debt: PalDebt): DebtorProfile {
+  return {
+    id: pendingCreditorCounterpartyId(debt.id),
+    full_name: debt.pending_creditor_name?.trim() || "Someone",
+    username: null,
+    avatar_url: null,
+    email: debt.pending_creditor_email ?? null,
+  };
+}
+
 function counterpartyFromDebt(debt: PalDebt, perspective: PalPerspective): DebtorProfile | null {
   if (perspective === "creditor" && !debt.debtor_id) {
     return pendingCounterpartyProfile(debt);
+  }
+  if (perspective === "debtor" && !debt.creditor_id) {
+    return pendingCreditorProfile(debt);
   }
   return perspective === "creditor" ? normalizeDebtor(debt) : normalizeCreditor(debt);
 }
 
 function isPendingPalDebt(debt: PalDebt) {
-  return !debt.debtor_id && Boolean(debt.invite_token);
+  return Boolean(debt.invite_token) && (!debt.debtor_id || !debt.creditor_id);
 }
 
 type HistoryEntry = {
@@ -776,15 +793,13 @@ export function PalOwesMePageView({
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
             {perspective === "creditor"
               ? "Track what friends owe you outside of group receipts — lunch, rides, loans, and more."
-              : "See debts others recorded for you. Pay them using their payout details below each person."}
+              : "Track what you owe — add pals manually or pay using their payout details."}
           </p>
         </div>
-        {perspective === "creditor" ? (
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Record debt
-          </Button>
-        ) : null}
+        <Button onClick={() => setAddOpen(true)}>
+          <Plus className="h-4 w-4" />
+          {perspective === "creditor" ? "Record debt" : "Record what you owe"}
+        </Button>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -857,50 +872,7 @@ export function PalOwesMePageView({
         </p>
       ) : visibleGroups.length === 0 ? (
         <div className="space-y-4">
-          {perspective === "creditor" ? (
-            <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-              <li>
-                <button
-                  type="button"
-                  onClick={() => setPickPalOpen(true)}
-                  className="glass flex h-full min-h-[6.25rem] w-full flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-primary/30 p-2 text-center transition hover:bg-primary/5 active:scale-[0.98]"
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <UserPlus className="h-4 w-4" />
-                  </div>
-                  <p className="text-xs font-medium text-primary">Add pal</p>
-                </button>
-              </li>
-            </ul>
-          ) : null}
-          <Card>
-            <CardContent className="flex flex-col items-center gap-3 px-4 py-8 text-center">
-              <HandCoins className="h-10 w-10 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">
-                {filter === "open"
-                  ? perspective === "creditor"
-                    ? "Add a pal to track who owes you, then record amounts from their profile."
-                    : "When someone records that you owe them, it will show up here automatically."
-                  : "Nothing here for this filter."}
-              </p>
-              {filter === "open" && perspective === "creditor" && (
-                <div className="flex flex-wrap justify-center gap-2">
-                  <Button variant="outline" onClick={() => setPickPalOpen(true)}>
-                    <UserPlus className="h-4 w-4" />
-                    Add pal
-                  </Button>
-                  <Button variant="outline" onClick={() => setAddOpen(true)}>
-                    <Plus className="h-4 w-4" />
-                    Record debt
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      ) : (
-        <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-          {perspective === "creditor" ? (
+          <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
             <li>
               <button
                 type="button"
@@ -913,7 +885,46 @@ export function PalOwesMePageView({
                 <p className="text-xs font-medium text-primary">Add pal</p>
               </button>
             </li>
-          ) : null}
+          </ul>
+          <Card>
+            <CardContent className="flex flex-col items-center gap-3 px-4 py-8 text-center">
+              <HandCoins className="h-10 w-10 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">
+                {filter === "open"
+                  ? perspective === "creditor"
+                    ? "Add a pal to track who owes you, then record amounts from their profile."
+                    : "Add who you owe — share a link if they don't have an account yet."
+                  : "Nothing here for this filter."}
+              </p>
+              {filter === "open" && (
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button variant="outline" onClick={() => setPickPalOpen(true)}>
+                    <UserPlus className="h-4 w-4" />
+                    Add pal
+                  </Button>
+                  <Button variant="outline" onClick={() => setAddOpen(true)}>
+                    <Plus className="h-4 w-4" />
+                    {perspective === "creditor" ? "Record debt" : "Record what you owe"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+          <li>
+            <button
+              type="button"
+              onClick={() => setPickPalOpen(true)}
+              className="glass flex h-full min-h-[6.25rem] w-full flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-primary/30 p-2 text-center transition hover:bg-primary/5 active:scale-[0.98]"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <UserPlus className="h-4 w-4" />
+              </div>
+              <p className="text-xs font-medium text-primary">Add pal</p>
+            </button>
+          </li>
           {visibleGroups.map((group) => {
             const name = displayName(group.counterparty);
             const net = group.netBalance;
@@ -1007,9 +1018,10 @@ export function PalOwesMePageView({
         />
       )}
 
-      {perspective === "creditor" && pickPalOpen && (
+      {pickPalOpen && (
         <AddDebtModal
           currentUserId={currentUserId}
+          perspective={perspective}
           pickOnly
           onClose={() => setPickPalOpen(false)}
           onPalPicked={(person) => {
@@ -1024,9 +1036,10 @@ export function PalOwesMePageView({
         />
       )}
 
-      {perspective === "creditor" && addOpen && (
+      {addOpen && (
         <AddDebtModal
           currentUserId={currentUserId}
+          perspective={perspective}
           onClose={() => setAddOpen(false)}
           onSaved={async () => {
             setAddOpen(false);
@@ -1452,6 +1465,7 @@ function DebtorDetailModal({
   }, [counterpartyId]);
 
   const isPendingCounterparty = isPendingPalCounterpartyId(counterpartyId);
+  const isPendingCreditorSide = counterpartyId.startsWith("pending-creditor:");
   const pendingInviteDebts = group.debts.filter((d) => isPendingPalDebt(d));
   const activeInviteToken = pendingInviteDebts.find((d) => d.invite_token)?.invite_token;
 
@@ -1474,18 +1488,33 @@ function DebtorDetailModal({
     setRecording(true);
     try {
       const body = isPendingCounterparty
-        ? {
-            pending_name: group.counterparty?.full_name?.trim() || "Someone",
-            pending_email: group.counterparty?.email?.trim() || null,
-            amount: parsedAmount,
-            description: description.trim() || null,
-          }
-        : {
-            debtor_id: counterpartyId,
-            amount: parsedAmount,
-            description: description.trim() || null,
-          };
-      const res = await fetch("/api/pal-debts", {
+        ? isCreditor
+          ? {
+              pending_name: group.counterparty?.full_name?.trim() || "Someone",
+              pending_email: group.counterparty?.email?.trim() || null,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+          : {
+              pending_creditor_name:
+                group.counterparty?.full_name?.trim() || "Someone",
+              pending_creditor_email:
+                group.counterparty?.email?.trim() || null,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+        : isCreditor
+          ? {
+              debtor_id: counterpartyId,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+          : {
+              creditor_id: counterpartyId,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            };
+      const res = await fetch(isCreditor ? "/api/pal-debts" : "/api/pal-debts/owe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1529,7 +1558,9 @@ function DebtorDetailModal({
                   <p className="text-xs text-muted-foreground">@{group.counterparty.username}</p>
                 ) : isPendingCounterparty ? (
                   <p className="text-xs text-violet-600 dark:text-violet-300">
-                    No account yet — share claim link
+                    {isPendingCreditorSide
+                      ? "Share link so they can confirm"
+                      : "No account yet — share claim link"}
                   </p>
                 ) : null}
               </div>
@@ -1547,10 +1578,12 @@ function DebtorDetailModal({
             </Button>
           </div>
 
-          {isCreditor && isPendingCounterparty && activeInviteToken ? (
+          {isPendingCounterparty && activeInviteToken ? (
             <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-500/5 px-3 py-2.5">
               <p className="text-xs font-medium text-violet-800 dark:text-violet-200">
-                Share this link so they can claim the debt
+                {isPendingCreditorSide
+                  ? "Share this link so they can confirm you owe them"
+                  : "Share this link so they can claim the debt"}
               </p>
               <div className="mt-2 flex gap-2">
                 <Button
@@ -1572,7 +1605,7 @@ function DebtorDetailModal({
                     asChild
                   >
                     <a
-                      href={`mailto:${encodeURIComponent(group.counterparty.email)}?subject=${encodeURIComponent("Claim your debt on Paypals")}&body=${encodeURIComponent(`Hi,\n\nI recorded a debt on Paypals. Claim it here:\n${palDebtInviteUrl(activeInviteToken)}\n`)}`}
+                      href={`mailto:${encodeURIComponent(group.counterparty.email)}?subject=${encodeURIComponent(isPendingCreditorSide ? "Confirm a debt on Paypals" : "Claim your debt on Paypals")}&body=${encodeURIComponent(isPendingCreditorSide ? `Hi,\n\nI recorded that I owe you on Paypals. Confirm here:\n${palDebtInviteUrl(activeInviteToken)}\n` : `Hi,\n\nI recorded a debt on Paypals. Claim it here:\n${palDebtInviteUrl(activeInviteToken)}\n`)}`}
                     >
                       <Mail className="h-3.5 w-3.5" />
                       Email
@@ -1604,9 +1637,9 @@ function DebtorDetailModal({
                 size="sm"
                 variant={receiveOpen ? "secondary" : "outline"}
                 className="flex-1 border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
-                disabled={recording || isPendingCounterparty}
+                disabled={recording || (isPendingCounterparty && !isPendingCreditorSide)}
                 title={
-                  isPendingCounterparty
+                  isPendingCounterparty && !isPendingCreditorSide
                     ? "They must claim the debt before you can record payments"
                     : undefined
                 }
@@ -1633,14 +1666,19 @@ function DebtorDetailModal({
                 }}
               >
                 <ArrowUpRight className="h-3.5 w-3.5" />
-                {recordOpen ? "Cancel" : "Lent"}
+                {recordOpen ? "Cancel" : "Owe more"}
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant={receiveOpen ? "secondary" : "default"}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-600/90"
-                disabled={recording}
+                disabled={recording || isPendingCreditorSide}
+                title={
+                  isPendingCreditorSide
+                    ? "They must confirm the debt before you can mark paid"
+                    : undefined
+                }
                 onClick={() => {
                   setRecordOpen(false);
                   setReceiveOpen((v) => !v);
@@ -1653,43 +1691,49 @@ function DebtorDetailModal({
           )}
 
           {!isCreditor && recordOpen ? (
-            <div className="mt-3 space-y-2 rounded-xl border border-primary/25 bg-primary/5 p-3">
+            <form
+              onSubmit={(e) => void submitRecord(e)}
+              className="mt-3 space-y-3 rounded-xl border border-primary/25 bg-primary/5 p-3"
+            >
               <p className="text-xs text-muted-foreground">
-                Amounts {name.split(" ")[0] ?? name} lent you. They record new lent entries on
-                their <span className="font-medium">Owes me</span> tab.
+                Add what you owe {name.split(" ")[0] ?? name}
               </p>
-              {group.debts.filter((d) => d.status === "open" && palDebtRemaining(d) > 0).length >
-              0 ? (
-                <ul className="space-y-1.5">
-                  {group.debts
-                    .filter((d) => d.status === "open" && palDebtRemaining(d) > 0)
-                    .map((d) => (
-                      <li
-                        key={d.id}
-                        className="flex items-center justify-between rounded-lg border border-border bg-background/80 px-2.5 py-2 text-sm"
-                      >
-                        <span className="truncate text-muted-foreground">
-                          {d.description?.startsWith("From group:") ? (
-                            <span className="inline-flex flex-col items-start gap-0.5">
-                              <span className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-                                From group
-                              </span>
-                              <span>{d.description.replace(/^From group:\s*/, "")}</span>
-                            </span>
-                          ) : (
-                            d.description || "Lent"
-                          )}
-                        </span>
-                        <span className="shrink-0 font-semibold tabular-nums">
-                          {money(palDebtRemaining(d), d.currency)}
-                        </span>
-                      </li>
-                    ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted-foreground">No open lent amounts right now.</p>
-              )}
-            </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pal-owe-record-amount">Amount (PHP)</Label>
+                <Input
+                  id="pal-owe-record-amount"
+                  type="text"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "" || /^\d*\.?\d*$/.test(raw)) setAmount(raw);
+                  }}
+                  placeholder="0.00"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pal-owe-record-note">What for? (optional)</Label>
+                <Textarea
+                  id="pal-owe-record-note"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                  placeholder="Lunch, ride share, borrowed cash…"
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={recording}>
+                {recording ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    Save record
+                  </>
+                )}
+              </Button>
+            </form>
           ) : null}
 
           {receiveOpen ? (
@@ -1958,18 +2002,21 @@ function DebtorDetailModal({
 
 function AddDebtModal({
   currentUserId,
+  perspective = "creditor",
   pickOnly = false,
   onClose,
   onSaved,
   onPalPicked,
 }: {
   currentUserId: string;
+  perspective?: PalPerspective;
   pickOnly?: boolean;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
   onPalPicked?: (person: PersonHit) => void;
 }) {
   const qc = useQueryClient();
+  const isCreditorSide = perspective === "creditor";
   const [mode, setMode] = useState<"friends" | "search" | "guest">("friends");
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<PersonHit[]>([]);
@@ -2067,25 +2114,38 @@ function AddDebtModal({
         return;
       }
     } else if (!selected) {
-      toast.error("Pick who owes you");
+      toast.error(isCreditorSide ? "Pick who owes you" : "Pick who you owe");
       return;
     }
 
     setBusy(true);
     try {
       const body = isGuest
-        ? {
-            pending_name: guestName.trim(),
-            pending_email: guestEmail.trim() || null,
-            amount: parsedAmount,
-            description: description.trim() || null,
-          }
-        : {
-            debtor_id: selected!.id,
-            amount: parsedAmount,
-            description: description.trim() || null,
-          };
-      const res = await fetch("/api/pal-debts", {
+        ? isCreditorSide
+          ? {
+              pending_name: guestName.trim(),
+              pending_email: guestEmail.trim() || null,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+          : {
+              pending_creditor_name: guestName.trim(),
+              pending_creditor_email: guestEmail.trim() || null,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+        : isCreditorSide
+          ? {
+              debtor_id: selected!.id,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            }
+          : {
+              creditor_id: selected!.id,
+              amount: parsedAmount,
+              description: description.trim() || null,
+            };
+      const res = await fetch(isCreditorSide ? "/api/pal-debts" : "/api/pal-debts/owe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2107,7 +2167,11 @@ function AddDebtModal({
         return;
       }
 
-      toast.success("Debt recorded — use Received when they pay you back");
+      toast.success(
+        isCreditorSide
+          ? "Debt recorded — use Received when they pay you back"
+          : "Recorded — pay them using their payout details when ready"
+      );
       await onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
@@ -2127,12 +2191,20 @@ function AddDebtModal({
         <div className="sticky top-0 z-[1] flex items-start justify-between gap-3 border-b border-border bg-background px-4 py-3">
           <div>
             <h2 id="add-debt-title" className="text-base font-semibold">
-              {pickOnly ? "Add pal to track" : "Record debt"}
+              {pickOnly
+                ? "Add pal to track"
+                : isCreditorSide
+                  ? "Record debt"
+                  : "Record what you owe"}
             </h2>
             <p className="text-xs text-muted-foreground">
               {pickOnly
-                ? "Pick a friend, search a user, or add someone without an account yet."
-                : "Who owes you and how much?"}
+                ? isCreditorSide
+                  ? "Pick a friend, search a user, or add someone without an account yet."
+                  : "Pick who you owe, or add someone without an account and share a link."
+                : isCreditorSide
+                  ? "Who owes you and how much?"
+                  : "Who do you owe and how much?"}
             </p>
           </div>
           <Button
@@ -2153,13 +2225,17 @@ function AddDebtModal({
             <div className="space-y-4">
               <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 px-4 py-3 text-center">
                 <p className="text-sm font-semibold text-violet-800 dark:text-violet-200">
-                  Debt recorded for {createdInvite.name}
+                  {isCreditorSide
+                    ? `Debt recorded for ${createdInvite.name}`
+                    : `You owe ${createdInvite.name}`}
                 </p>
                 <p className="mt-1 text-2xl font-bold tabular-nums">
                   {money(createdInvite.amount, createdInvite.currency)}
                 </p>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Share this link so they can claim it after signing up
+                  {isCreditorSide
+                    ? "Share this link so they can claim it after signing up"
+                    : "Share this link so they can confirm you owe them"}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -2190,7 +2266,9 @@ function AddDebtModal({
                   void (async () => {
                     if (pickOnly && createdInvite) {
                       onPalPicked?.({
-                        id: pendingPalCounterpartyId(createdInvite.debtId),
+                        id: isCreditorSide
+                          ? pendingPalCounterpartyId(createdInvite.debtId)
+                          : pendingCreditorCounterpartyId(createdInvite.debtId),
                         full_name: createdInvite.name,
                         username: null,
                         avatar_url: null,
@@ -2271,12 +2349,14 @@ function AddDebtModal({
           ) : mode === "guest" ? (
             <form onSubmit={(e) => void submit(e)} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="guest-name">Their name</Label>
+                <Label htmlFor="guest-name">
+                  {isCreditorSide ? "Their name" : "Who you owe"}
+                </Label>
                 <Input
                   id="guest-name"
                   value={guestName}
                   onChange={(e) => setGuestName(e.target.value)}
-                  placeholder="e.g. Alex"
+                  placeholder={isCreditorSide ? "e.g. Alex" : "e.g. Maria"}
                   autoFocus
                 />
               </div>

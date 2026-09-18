@@ -24,7 +24,7 @@ const createSchema = z
   );
 
 const pendingDebtFields =
-  "pending_debtor_name, pending_debtor_email, invite_token, claimed_at";
+  "pending_debtor_name, pending_debtor_email, pending_creditor_name, pending_creditor_email, invite_token, claimed_at";
 
 const debtSelectCreditorWithReceived =
   `id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, debtor:debtor_id(id, full_name, username, avatar_url, email)`;
@@ -150,10 +150,10 @@ export async function GET(request: Request) {
     function counterpartyKey(row: Record<string, unknown>): string {
       const id = row[counterpartyColumn] as string | null | undefined;
       if (id) return id;
-      if (perspective === "creditor" && !id) {
+      if (perspective === "creditor") {
         return `pending:${row.id as string}`;
       }
-      return row.id as string;
+      return `pending-creditor:${row.id as string}`;
     }
 
     const creditByCounterparty = new Map<string, number>();

@@ -31,12 +31,13 @@ export function PalDebtClaimView({ token }: { token: string }) {
       if (!res.ok) throw new Error(json?.error?.message ?? "Invalid invite");
       return json.data as {
         debtId: string;
+        inviteKind: "debtor_claim" | "creditor_claim";
         pendingName: string | null;
         pendingEmail: string | null;
         amount: number;
         currency: string;
         description: string | null;
-        creditorName: string;
+        counterpartyName: string;
       };
     },
     retry: false,
@@ -56,7 +57,11 @@ export function PalDebtClaimView({ token }: { token: string }) {
         return;
       }
       if (!res.ok) throw new Error(json?.error?.message ?? "Claim failed");
-      toast.success("Debt linked to your account");
+      toast.success(
+        data?.inviteKind === "creditor_claim"
+          ? "Debt linked — they owe you on Paypals"
+          : "Debt linked to your account"
+      );
       router.push("/pal-owes-me");
       router.refresh();
     } catch (err) {
@@ -101,24 +106,35 @@ export function PalDebtClaimView({ token }: { token: string }) {
     );
   }
 
+  const isCreditorClaim = data.inviteKind === "creditor_claim";
+  const amountLabel = money(data.amount, data.currency);
+
   return (
     <Card className="mx-auto max-w-md">
       <CardHeader className="text-center">
         <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
           <HandCoins className="h-5 w-5" />
         </div>
-        <CardTitle>{data.creditorName} recorded a debt</CardTitle>
+        <CardTitle>
+          {isCreditorClaim
+            ? `${data.counterpartyName} owes you`
+            : `${data.counterpartyName} recorded a debt`}
+        </CardTitle>
         <CardDescription>
-          {data.pendingName
-            ? `${data.creditorName} says ${data.pendingName} owes ${money(data.amount, data.currency)}.`
-            : `You owe ${money(data.amount, data.currency)}.`}
-          {data.description ? ` ${data.description}` : ""}
+          {isCreditorClaim
+            ? `${data.counterpartyName} recorded that they owe you ${amountLabel}${
+                data.description ? ` — ${data.description}` : ""
+              }. Claim to confirm on Paypals.`
+            : data.pendingName
+              ? `${data.counterpartyName} says ${data.pendingName} owes ${amountLabel}.`
+              : `You owe ${amountLabel}.`}
+          {!isCreditorClaim && data.description ? ` ${data.description}` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <Button className="w-full" onClick={() => void claim()} disabled={claiming}>
           {claiming && <Loader2 className="animate-spin" />}
-          Claim this debt
+          {isCreditorClaim ? "Confirm they owe me" : "Claim this debt"}
         </Button>
         <p className="text-center text-xs text-muted-foreground">
           No account yet?{" "}

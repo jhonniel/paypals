@@ -126,7 +126,28 @@ export async function DELETE(_request: Request, { params }: Params) {
     }
 
     if (loadErr) return fail(loadErr.message, 400);
-    if (!existing) return notFound("Record not found");
+
+    if (!existing) {
+      const { data: debtorPending, error: debtorLoadErr } = await supabase
+        .from("pal_debts")
+        .select("id, debtor_id, creditor_id, invite_token")
+        .eq("id", id)
+        .eq("debtor_id", user.id)
+        .is("creditor_id", null)
+        .maybeSingle();
+
+      if (debtorLoadErr) return fail(debtorLoadErr.message, 400);
+      if (!debtorPending?.invite_token) return notFound("Record not found");
+
+      const { error: debtorDeleteErr } = await supabase
+        .from("pal_debts")
+        .delete()
+        .eq("id", id)
+        .eq("debtor_id", user.id);
+
+      if (debtorDeleteErr) return fail(debtorDeleteErr.message, 400);
+      return ok({ deleted: true, open_remaining: 0, group_restored: false });
+    }
 
     let groupRestore: Awaited<ReturnType<typeof restoreGroupMemberFromPalDebt>> | null =
       null;
@@ -153,11 +174,13 @@ export async function DELETE(_request: Request, { params }: Params) {
     if (error) return fail(error.message, 400);
 
     try {
-      const openRemaining = await recalculatePalDebtorAllocations(
-        supabase,
-        user.id,
-        existing.debtor_id as string
-      );
+      const openRemaining = existing.debtor_id
+        ? await recalculatePalDebtorAllocations(
+            supabase,
+            user.id,
+            existing.debtor_id as string
+          )
+        : 0;
       return ok({
         deleted: true,
         open_remaining: openRemaining,
