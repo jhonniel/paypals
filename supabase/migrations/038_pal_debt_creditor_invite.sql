@@ -11,6 +11,9 @@ ALTER TABLE public.pal_debts
   DROP CONSTRAINT IF EXISTS pal_debts_debtor_or_pending;
 
 ALTER TABLE public.pal_debts
+  DROP CONSTRAINT IF EXISTS pal_debts_participants_or_pending;
+
+ALTER TABLE public.pal_debts
   ADD CONSTRAINT pal_debts_participants_or_pending CHECK (
     (debtor_id IS NOT NULL AND creditor_id IS NOT NULL)
     OR (
@@ -39,6 +42,7 @@ ALTER TABLE public.pal_debts
     OR creditor_id <> debtor_id
   );
 
+DROP POLICY IF EXISTS "pal_debts_insert_debtor_pending" ON public.pal_debts;
 CREATE POLICY "pal_debts_insert_debtor_pending"
   ON public.pal_debts
   FOR INSERT
@@ -50,6 +54,7 @@ CREATE POLICY "pal_debts_insert_debtor_pending"
     AND invite_token IS NOT NULL
   );
 
+DROP POLICY IF EXISTS "pal_debts_delete_debtor_pending" ON public.pal_debts;
 CREATE POLICY "pal_debts_delete_debtor_pending"
   ON public.pal_debts
   FOR DELETE
@@ -61,6 +66,16 @@ CREATE POLICY "pal_debts_delete_debtor_pending"
   );
 
 -- Preview either invite kind (debtor claim or creditor claim)
+-- (Re-assert columns if you run only from this section in the SQL editor.)
+ALTER TABLE public.pal_debts
+  ALTER COLUMN creditor_id DROP NOT NULL;
+
+ALTER TABLE public.pal_debts
+  ADD COLUMN IF NOT EXISTS pending_creditor_name text,
+  ADD COLUMN IF NOT EXISTS pending_creditor_email text;
+
+DROP FUNCTION IF EXISTS public.get_pal_debt_invite(text);
+
 CREATE OR REPLACE FUNCTION public.get_pal_debt_invite(p_token text)
 RETURNS TABLE (
   debt_id uuid,
