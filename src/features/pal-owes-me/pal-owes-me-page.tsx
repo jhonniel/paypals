@@ -35,6 +35,13 @@ import { readApiJson } from "@/lib/api-client";
 import { prepareImageFileForUpload } from "@/lib/convert-heic-client";
 import { palDebtRemaining, palDebtorNetBalance } from "@/lib/pal-debt-balance";
 import {
+  displayPalCounterpartyName,
+  pendingPartyEmailFromDebt,
+  pendingPartyKeyFromDebt,
+  pendingPartyNameFromDebt,
+  pendingPartyNameFromDebts,
+} from "@/lib/pal-debt-display";
+import {
   isPendingPalCounterpartyId,
   palDebtInviteUrl,
   pendingCreditorCounterpartyId,
@@ -57,7 +64,7 @@ type DebtorProfile = {
 
 type PalDebt = {
   id: string;
-  creditor_id: string;
+  creditor_id: string | null;
   debtor_id: string | null;
   amount: number;
   amount_received?: number | null;
@@ -167,40 +174,85 @@ function normalizeCreditor(debt: PalDebt): DebtorProfile | null {
 function counterpartyId(debt: PalDebt, perspective: PalPerspective): string {
   if (perspective === "creditor") {
     if (debt.debtor_id) return debt.debtor_id;
-    return pendingPalCounterpartyId(debt.id);
+    return (
+      pendingPartyKeyFromDebt(debt, perspective) ??
+      pendingPalCounterpartyId(debt.id)
+    );
   }
   if (debt.creditor_id) return debt.creditor_id;
-  return pendingCreditorCounterpartyId(debt.id);
+  return (
+    pendingPartyKeyFromDebt(debt, perspective) ??
+    pendingCreditorCounterpartyId(debt.id)
+  );
 }
 
 function pendingCounterpartyProfile(debt: PalDebt): DebtorProfile {
+  const name = pendingPartyNameFromDebt(debt, "creditor") ?? "Someone";
   return {
-    id: pendingPalCounterpartyId(debt.id),
-    full_name: debt.pending_debtor_name?.trim() || "Someone",
+    id:
+      pendingPartyKeyFromDebt(debt, "creditor") ??
+      pendingPalCounterpartyId(debt.id),
+    full_name: name,
     username: null,
     avatar_url: null,
-    email: debt.pending_debtor_email ?? null,
+    email: pendingPartyEmailFromDebt(debt, "creditor"),
   };
 }
 
 function pendingCreditorProfile(debt: PalDebt): DebtorProfile {
+  const name = pendingPartyNameFromDebt(debt, "debtor") ?? "Someone";
   return {
-    id: pendingCreditorCounterpartyId(debt.id),
-    full_name: debt.pending_creditor_name?.trim() || "Someone",
+    id:
+      pendingPartyKeyFromDebt(debt, "debtor") ??
+      pendingCreditorCounterpartyId(debt.id),
+    full_name: name,
     username: null,
     avatar_url: null,
-    email: debt.pending_creditor_email ?? null,
+    email: pendingPartyEmailFromDebt(debt, "debtor"),
   };
 }
 
-function counterpartyFromDebt(debt: PalDebt, perspective: PalPerspective): DebtorProfile | null {
-  if (perspective === "creditor" && !debt.debtor_id) {
-    return pendingCounterpartyProfile(debt);
+function enrichCounterpartyProfile(
+  counterparty: DebtorProfile | null,
+  debts: PalDebt[],
+  perspective: PalPerspective
+): DebtorProfile | null {
+  const pendingName = pendingPartyNameFromDebts(debts, perspective);
+  const pendingEmail = debts
+    .map((d) => pendingPartyEmailFromDebt(d, perspective))
+    .find(Boolean);
+  if (counterparty) {
+    const label = counterparty.full_name?.trim();
+    if (pendingName && (!label || label === "Someone")) {
+      return {
+        ...counterparty,
+        full_name: pendingName,
+        email: counterparty.email ?? pendingEmail ?? null,
+      };
+    }
+    return counterparty;
   }
-  if (perspective === "debtor" && !debt.creditor_id) {
+  if (debts[0]) return counterpartyFromDebt(debts[0], perspective);
+  return null;
+}
+
+function counterpartyFromDebt(debt: PalDebt, perspective: PalPerspective): DebtorProfile | null {
+  if (perspective === "creditor") {
+    if (!debt.debtor_id) return pendingCounterpartyProfile(debt);
+    const linked = normalizeDebtor(debt);
+    if (linked) return linked;
+    if (pendingPartyNameFromDebt(debt, perspective)) {
+      return pendingCounterpartyProfile(debt);
+    }
+    return null;
+  }
+  if (!debt.creditor_id) return pendingCreditorProfile(debt);
+  const linked = normalizeCreditor(debt);
+  if (linked) return linked;
+  if (pendingPartyNameFromDebt(debt, perspective)) {
     return pendingCreditorProfile(debt);
   }
-  return perspective === "creditor" ? normalizeDebtor(debt) : normalizeCreditor(debt);
+  return null;
 }
 
 function isPendingPalDebt(debt: PalDebt) {
@@ -605,10 +657,14 @@ export function PalOwesMePageView({
         netBalance: 0,
         currency: debt.currency,
       };
-      if (cp && !row.counterparty) row.counterparty = cp;
       if (!row.debts.some((d) => d.id === debt.id)) {
         row.debts.push(debt);
       }
+      row.counterparty = enrichCounterpartyProfile(
+        cp ?? row.counterparty,
+        row.debts,
+        perspective
+      );
       if (debt.status === "open") {
         row.openTotal += palDebtRemaining(debt);
       }
@@ -666,9 +722,12 @@ export function PalOwesMePageView({
     const personDebts = allDebts.filter(
       (d) => counterpartyId(d, perspective) === selectedCounterpartyId
     );
-    const counterparty =
+    const counterparty = enrichCounterpartyProfile(
       selectedCounterpartyProfile ??
-      (personDebts[0] ? counterpartyFromDebt(personDebts[0], perspective) : null);
+        (personDebts[0] ? counterpartyFromDebt(personDebts[0], perspective) : null),
+      personDebts,
+      perspective
+    );
     if (!counterparty && personDebts.length === 0) {
       const paymentHit = allPayments.find((p) =>
         perspective === "creditor"
@@ -926,7 +985,11 @@ export function PalOwesMePageView({
             </button>
           </li>
           {visibleGroups.map((group) => {
-            const name = displayName(group.counterparty);
+            const name = displayPalCounterpartyName(
+              group.counterparty,
+              group.debts,
+              perspective
+            );
             const net = group.netBalance;
             const cpId =
               group.counterparty?.id ??
@@ -937,7 +1000,12 @@ export function PalOwesMePageView({
                 <button
                   type="button"
                   onClick={() => {
-                    if (group.counterparty) openPal(group.counterparty);
+                    const cp = enrichCounterpartyProfile(
+                      group.counterparty,
+                      group.debts,
+                      perspective
+                    );
+                    if (cp) openPal(cp);
                     else if (cpId) {
                       setSelectedCounterpartyId(cpId);
                       setSelectedCounterpartyProfile(null);
@@ -1102,6 +1170,7 @@ export function PalOwesMePageView({
 
 function PalOwedCollapsible({
   debtor,
+  debts = [],
   openAmount,
   currency,
   methods,
@@ -1112,6 +1181,7 @@ function PalOwedCollapsible({
   onPaymentSaved,
 }: {
   debtor: DebtorProfile | null;
+  debts?: PalDebt[];
   openAmount: number;
   currency: string;
   methods: PaymentMethod[];
@@ -1122,7 +1192,7 @@ function PalOwedCollapsible({
   onPaymentSaved?: () => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const name = displayName(debtor);
+  const name = displayPalCounterpartyName(debtor, debts, perspective);
   const owesLabel =
     perspective === "creditor"
       ? openAmount > 0
@@ -1402,7 +1472,12 @@ function DebtorDetailModal({
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [recording, setRecording] = useState(false);
-  const name = displayName(group.counterparty);
+  const name = displayPalCounterpartyName(
+    group.counterparty,
+    group.debts,
+    perspective
+  );
+  const pendingName = pendingPartyNameFromDebts(group.debts, perspective);
 
   const { data: profileData } = useQuery({
     queryKey: ["profile"],
@@ -1465,7 +1540,9 @@ function DebtorDetailModal({
   }, [counterpartyId]);
 
   const isPendingCounterparty = isPendingPalCounterpartyId(counterpartyId);
-  const isPendingCreditorSide = counterpartyId.startsWith("pending-creditor:");
+  const isPendingCreditorSide =
+    counterpartyId.startsWith("pending-creditor:") ||
+    counterpartyId.startsWith("pending-creditor-name:");
   const pendingInviteDebts = group.debts.filter((d) => isPendingPalDebt(d));
   const activeInviteToken = pendingInviteDebts.find((d) => d.invite_token)?.invite_token;
 
@@ -1490,14 +1567,13 @@ function DebtorDetailModal({
       const body = isPendingCounterparty
         ? isCreditor
           ? {
-              pending_name: group.counterparty?.full_name?.trim() || "Someone",
+              pending_name: pendingName || "Someone",
               pending_email: group.counterparty?.email?.trim() || null,
               amount: parsedAmount,
               description: description.trim() || null,
             }
           : {
-              pending_creditor_name:
-                group.counterparty?.full_name?.trim() || "Someone",
+              pending_creditor_name: pendingName || "Someone",
               pending_creditor_email:
                 group.counterparty?.email?.trim() || null,
               amount: parsedAmount,
@@ -1842,6 +1918,7 @@ function DebtorDetailModal({
         <div className="space-y-5 p-4">
           <PalOwedCollapsible
             debtor={group.counterparty}
+            debts={group.debts}
             openAmount={totals.open}
             currency={group.currency}
             methods={payoutMethods}
@@ -2267,8 +2344,8 @@ function AddDebtModal({
                     if (pickOnly && createdInvite) {
                       onPalPicked?.({
                         id: isCreditorSide
-                          ? pendingPalCounterpartyId(createdInvite.debtId)
-                          : pendingCreditorCounterpartyId(createdInvite.debtId),
+                          ? `pending-name:${createdInvite.name.trim().toLowerCase()}`
+                          : `pending-creditor-name:${createdInvite.name.trim().toLowerCase()}`,
                         full_name: createdInvite.name,
                         username: null,
                         avatar_url: null,

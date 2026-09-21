@@ -12,6 +12,7 @@ import {
   aggregatePalNetByParty,
   sumPalPartyTotals,
 } from "@/lib/pal-debt-balance";
+import { pendingPartyKeyFromDebt } from "@/lib/pal-debt-display";
 import { moneyNumber } from "@/lib/money";
 
 export async function GET() {
@@ -29,6 +30,7 @@ export async function GET() {
     } = await supabase.auth.getUser();
 
     if (!user) return unauthorized();
+    const userId = user.id;
 
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -84,13 +86,17 @@ export async function GET() {
       computeUserGroupPayableBreakdown(supabase, user.id),
       supabase
         .from("pal_debts")
-        .select("id, debtor_id, amount, amount_received, currency")
-        .eq("creditor_id", user.id)
+        .select(
+          "id, debtor_id, amount, amount_received, currency, pending_debtor_name, pending_debtor_email"
+        )
+        .eq("creditor_id", userId)
         .eq("status", "open"),
       supabase
         .from("pal_debts")
-        .select("id, creditor_id, amount, amount_received, currency")
-        .eq("debtor_id", user.id)
+        .select(
+          "id, creditor_id, amount, amount_received, currency, pending_creditor_name, pending_creditor_email"
+        )
+        .eq("debtor_id", userId)
         .eq("status", "open"),
       supabase
         .from("receipts")
@@ -113,27 +119,60 @@ export async function GET() {
 
     type PalDebtCreditorRow = {
       id: string;
-      debtor_id: string;
+      debtor_id: string | null;
       amount: number;
       amount_received?: number | null;
       currency: string;
+      pending_debtor_name?: string | null;
+      pending_debtor_email?: string | null;
     };
 
     type PalDebtDebtorRow = {
       id: string;
-      creditor_id: string;
+      creditor_id: string | null;
       amount: number;
       amount_received?: number | null;
       currency: string;
+      pending_creditor_name?: string | null;
+      pending_creditor_email?: string | null;
     };
 
-    const palDebtsRaw = palDebtsOpenRes.error
-      ? []
-      : ((palDebtsOpenRes.data ?? []) as PalDebtCreditorRow[]);
+    async function loadPalDebtsOpen(): Promise<PalDebtCreditorRow[]> {
+      if (!palDebtsOpenRes.error) {
+        return (palDebtsOpenRes.data ?? []) as PalDebtCreditorRow[];
+      }
+      if (!/pending_debtor_name|column/i.test(palDebtsOpenRes.error.message)) {
+        return [];
+      }
+      const legacy = await supabase
+        .from("pal_debts")
+        .select("id, debtor_id, amount, amount_received, currency")
+        .eq("creditor_id", userId)
+        .eq("status", "open");
+      if (legacy.error) return [];
+      return (legacy.data ?? []) as PalDebtCreditorRow[];
+    }
 
-    const palDebtsOweRaw = palDebtsOweRes.error
-      ? []
-      : ((palDebtsOweRes.data ?? []) as PalDebtDebtorRow[]);
+    async function loadPalDebtsOwe(): Promise<PalDebtDebtorRow[]> {
+      if (!palDebtsOweRes.error) {
+        return (palDebtsOweRes.data ?? []) as PalDebtDebtorRow[];
+      }
+      if (!/pending_creditor_name|column/i.test(palDebtsOweRes.error.message)) {
+        return [];
+      }
+      const legacy = await supabase
+        .from("pal_debts")
+        .select("id, creditor_id, amount, amount_received, currency")
+        .eq("debtor_id", userId)
+        .eq("status", "open");
+      if (legacy.error) return [];
+      return (legacy.data ?? []) as PalDebtDebtorRow[];
+    }
+
+    const [palDebtsRaw, palDebtsOweRaw] = await Promise.all([
+      loadPalDebtsOpen(),
+      loadPalDebtsOwe(),
+    ]);
 
     const palCredits =
       palCreditsRes.error &&
@@ -155,8 +194,12 @@ export async function GET() {
       palCreditsOwe.map((c) => [c.creditor_id as string, Number(c.credit_balance ?? 0)])
     );
 
-    const debtorIds = [...new Set(palDebtsRaw.map((d) => d.debtor_id))];
-    const creditorIds = [...new Set(palDebtsOweRaw.map((d) => d.creditor_id))];
+    const debtorIds = [
+      ...new Set(palDebtsRaw.map((d) => d.debtor_id).filter(Boolean)),
+    ] as string[];
+    const creditorIds = [
+      ...new Set(palDebtsOweRaw.map((d) => d.creditor_id).filter(Boolean)),
+    ] as string[];
     const profileIds = [...new Set([...debtorIds, ...creditorIds])];
 
     const { data: palProfiles } = profileIds.length
@@ -175,9 +218,63 @@ export async function GET() {
       return p?.full_name?.trim() || p?.username || p?.email || "Someone";
     }
 
+    function palPartyId(
+      debt: PalDebtCreditorRow | PalDebtDebtorRow,
+      perspective: "creditor" | "debtor"
+    ): string {
+      const pendingKey = pendingPartyKeyFromDebt(
+        {
+          id: debt.id,
+          creditor_id:
+            "creditor_id" in debt ? (debt.creditor_id as string | null) : null,
+          debtor_id:
+            "debtor_id" in debt ? (debt.debtor_id as string | null) : null,
+          pending_debtor_name:
+            "pending_debtor_name" in debt ? debt.pending_debtor_name : null,
+          pending_creditor_name:
+            "pending_creditor_name" in debt ? debt.pending_creditor_name : null,
+        },
+        perspective
+      );
+      if (pendingKey) return pendingKey;
+      if (perspective === "creditor" && "debtor_id" in debt && debt.debtor_id) {
+        return debt.debtor_id;
+      }
+      if (perspective === "debtor" && "creditor_id" in debt && debt.creditor_id) {
+        return debt.creditor_id;
+      }
+      return `pending:${debt.id}`;
+    }
+
+    const palOwedNameByParty = new Map<string, string>();
+    for (const d of palDebtsRaw) {
+      const partyId = palPartyId(d, "creditor");
+      if (!palOwedNameByParty.has(partyId)) {
+        palOwedNameByParty.set(
+          partyId,
+          d.debtor_id
+            ? profileName(d.debtor_id)
+            : d.pending_debtor_name?.trim() || "Someone"
+        );
+      }
+    }
+
+    const palOweNameByParty = new Map<string, string>();
+    for (const d of palDebtsOweRaw) {
+      const partyId = palPartyId(d, "debtor");
+      if (!palOweNameByParty.has(partyId)) {
+        palOweNameByParty.set(
+          partyId,
+          d.creditor_id
+            ? profileName(d.creditor_id)
+            : d.pending_creditor_name?.trim() || "Someone"
+        );
+      }
+    }
+
     const palOwedTotals = aggregatePalNetByParty(
       palDebtsRaw.map((d) => ({
-        partyId: d.debtor_id,
+        partyId: palPartyId(d, "creditor"),
         remaining: palDebtRemaining({
           amount: Number(d.amount),
           amount_received: d.amount_received,
@@ -191,7 +288,7 @@ export async function GET() {
 
     const palOweTotals = aggregatePalNetByParty(
       palDebtsOweRaw.map((d) => ({
-        partyId: d.creditor_id,
+        partyId: palPartyId(d, "debtor"),
         remaining: palDebtRemaining({
           amount: Number(d.amount),
           amount_received: d.amount_received,
@@ -205,7 +302,7 @@ export async function GET() {
 
     const palOwedToYou = palOwedTotals.map((r) => ({
       debtorId: r.partyId,
-      name: profileName(r.partyId),
+      name: palOwedNameByParty.get(r.partyId) ?? profileName(r.partyId),
       amount: r.amount,
       currency: r.currency,
       debtCount: r.debtCount,
@@ -213,7 +310,7 @@ export async function GET() {
 
     const palOweToOthers = palOweTotals.map((r) => ({
       creditorId: r.partyId,
-      name: profileName(r.partyId),
+      name: palOweNameByParty.get(r.partyId) ?? profileName(r.partyId),
       amount: r.amount,
       currency: r.currency,
       debtCount: r.debtCount,

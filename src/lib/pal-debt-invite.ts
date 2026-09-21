@@ -21,5 +21,10 @@ export function pendingCreditorCounterpartyId(debtId: string) {
 }
 
 export function isPendingPalCounterpartyId(id: string) {
-  return id.startsWith("pending:") || id.startsWith("pending-creditor:");
+  return (
+    id.startsWith("pending:") ||
+    id.startsWith("pending-creditor:") ||
+    id.startsWith("pending-name:") ||
+    id.startsWith("pending-creditor-name:")
+  );
 }

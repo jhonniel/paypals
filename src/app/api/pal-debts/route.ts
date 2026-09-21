@@ -30,13 +30,13 @@ const debtSelectCreditorWithReceived =
   `id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, debtor:debtor_id(id, full_name, username, avatar_url, email)`;
 
 const debtSelectDebtorWithReceived =
-  "id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, creditor:creditor_id(id, full_name, username, avatar_url, email, payment_methods)";
+  `id, creditor_id, debtor_id, amount, amount_received, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, creditor:creditor_id(id, full_name, username, avatar_url, email, payment_methods)`;
 
 const debtSelectCreditorLegacy =
   `id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, debtor:debtor_id(id, full_name, username, avatar_url, email)`;
 
 const debtSelectDebtorLegacy =
-  "id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, creditor:creditor_id(id, full_name, username, avatar_url, email)";
+  `id, creditor_id, debtor_id, amount, currency, description, status, created_at, updated_at, settled_at, ${pendingDebtFields}, creditor:creditor_id(id, full_name, username, avatar_url, email)`;
 
 function normalizeDebtRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => ({
@@ -82,7 +82,7 @@ export async function GET(request: Request) {
       debtsRes = await fetchDebts(debtSelectLegacy);
     }
     if (debtsRes.error && /payment_methods|column/i.test(debtsRes.error.message)) {
-      debtsRes = await fetchDebts(debtSelectDebtorLegacy);
+      debtsRes = await fetchDebts(debtSelectLegacy);
     }
     if (debtsRes.error) return fail(debtsRes.error.message, 400);
 
