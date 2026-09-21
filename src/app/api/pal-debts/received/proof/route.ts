@@ -64,6 +64,9 @@ export async function POST(request: Request) {
     const creditorIdField = String(form.get("creditor_id") ?? "").trim();
     const debtorIdField = String(form.get("debtor_id") ?? "").trim();
     const pendingPartyKey = String(form.get("pending_party_key") ?? "").trim();
+    const pendingSideRaw = String(form.get("side") ?? "debtor").trim();
+    const pendingSide =
+      pendingSideRaw === "creditor" ? ("creditor" as const) : ("debtor" as const);
     const debtIdsRaw = String(form.get("debt_ids") ?? "").trim();
     let pendingDebtIds: string[] = [];
     if (debtIdsRaw) {
@@ -119,7 +122,7 @@ export async function POST(request: Request) {
     const note = String(form.get("note") ?? "").trim() || null;
     const currency = String(form.get("currency") ?? "PHP").trim().toUpperCase();
     const isDebtorPaying = isPendingPay
-      ? true
+      ? pendingSide === "debtor"
       : Boolean(creditorIdField && !debtorIdField);
 
     if (!isPendingPay) {
@@ -247,7 +250,7 @@ export async function POST(request: Request) {
       const result = isPendingPay
         ? await applyPendingPalPayment(supabase, {
             userId: user.id,
-            side: "debtor",
+            side: pendingSide,
             pendingPartyKey,
             debtIds: pendingDebtIds,
             paymentAmount,

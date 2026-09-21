@@ -387,6 +387,7 @@ function PalPaymentProofForm({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            side: "debtor",
             pending_party_key: pendingPartyKey,
             debt_ids: openDebtIds,
             amount: parsedAmount,
@@ -398,6 +399,7 @@ function PalPaymentProofForm({
         const ready = await prepareImageFileForUpload(proofFile!);
         const form = new FormData();
         if (isPendingPayment) {
+          form.append("side", "debtor");
           form.append("pending_party_key", pendingPartyKey!);
           form.append("debt_ids", JSON.stringify(openDebtIds));
         } else {
@@ -412,6 +414,7 @@ function PalPaymentProofForm({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            side: isCreditor ? "creditor" : "debtor",
             pending_party_key: pendingPartyKey,
             debt_ids: openDebtIds,
             amount: parsedAmount,

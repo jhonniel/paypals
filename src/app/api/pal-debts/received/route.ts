@@ -20,15 +20,8 @@ const debtorBodySchema = z.object({
   note: z.string().max(500).nullable().optional(),
 });
 
-const pendingCreditorBodySchema = z.object({
-  pending_party_key: z.string().trim().min(1).max(200),
-  debt_ids: z.array(z.string().uuid()).min(1).max(50),
-  amount: z.number().positive().max(999_999_999),
-  currency: z.string().length(3).optional(),
-  note: z.string().max(500).nullable().optional(),
-});
-
-const pendingDebtorBodySchema = z.object({
+const pendingBodySchema = z.object({
+  side: z.enum(["creditor", "debtor"]),
   pending_party_key: z.string().trim().min(1).max(200),
   debt_ids: z.array(z.string().uuid()).min(1).max(50),
   amount: z.number().positive().max(999_999_999),
@@ -44,49 +37,26 @@ export async function POST(request: Request) {
     const { supabase, user } = auth;
 
     const raw = await request.json();
-    const asPendingCreditor = pendingCreditorBodySchema.safeParse(raw);
-    const asPendingDebtor = pendingDebtorBodySchema.safeParse(raw);
+    const asPending = pendingBodySchema.safeParse(raw);
     const asDebtor = debtorBodySchema.safeParse(raw);
     const asCreditor = creditorBodySchema.safeParse(raw);
 
-    if (asPendingCreditor.success) {
+    if (asPending.success) {
       try {
         const result = await applyPendingPalPayment(supabase, {
           userId: user.id,
-          side: "creditor",
-          pendingPartyKey: asPendingCreditor.data.pending_party_key,
-          debtIds: asPendingCreditor.data.debt_ids,
-          paymentAmount: asPendingCreditor.data.amount,
-          currency: asPendingCreditor.data.currency ?? "PHP",
-          note: asPendingCreditor.data.note ?? null,
+          side: asPending.data.side,
+          pendingPartyKey: asPending.data.pending_party_key,
+          debtIds: asPending.data.debt_ids,
+          paymentAmount: asPending.data.amount,
+          currency: asPending.data.currency ?? "PHP",
+          note: asPending.data.note ?? null,
         });
         return created({
           payment: result.payment,
           open_remaining: result.openRemaining,
           credit_balance: result.creditBalance,
-          amount_applied: asPendingCreditor.data.amount,
-        });
-      } catch (e) {
-        return fail(e instanceof Error ? e.message : "Could not record payment", 400);
-      }
-    }
-
-    if (asPendingDebtor.success) {
-      try {
-        const result = await applyPendingPalPayment(supabase, {
-          userId: user.id,
-          side: "debtor",
-          pendingPartyKey: asPendingDebtor.data.pending_party_key,
-          debtIds: asPendingDebtor.data.debt_ids,
-          paymentAmount: asPendingDebtor.data.amount,
-          currency: asPendingDebtor.data.currency ?? "PHP",
-          note: asPendingDebtor.data.note ?? null,
-        });
-        return created({
-          payment: result.payment,
-          open_remaining: result.openRemaining,
-          credit_balance: result.creditBalance,
-          amount_applied: asPendingDebtor.data.amount,
+          amount_applied: asPending.data.amount,
         });
       } catch (e) {
         return fail(e instanceof Error ? e.message : "Could not record payment", 400);
