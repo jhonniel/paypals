@@ -88,8 +88,9 @@ type PalPerspective = "creditor" | "debtor";
 
 type PalDebtPayment = {
   id: string;
-  creditor_id: string;
-  debtor_id: string;
+  creditor_id: string | null;
+  debtor_id: string | null;
+  pending_party_key?: string | null;
   amount: number;
   currency: string;
   note: string | null;
@@ -290,9 +291,7 @@ function buildPalHistory(
     });
   }
   for (const payment of payments.filter((p) =>
-    perspective === "creditor"
-      ? p.debtor_id === counterpartyIdValue
-      : p.creditor_id === counterpartyIdValue
+    paymentMatchesCounterparty(p, counterpartyIdValue, perspective)
   )) {
     entries.push({
       id: payment.id,
@@ -307,6 +306,18 @@ function buildPalHistory(
   return entries.sort(
     (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
   );
+}
+
+function paymentMatchesCounterparty(
+  payment: PalDebtPayment,
+  counterpartyIdValue: string,
+  perspective: PalPerspective
+): boolean {
+  if (payment.pending_party_key === counterpartyIdValue) return true;
+  if (isPendingPalCounterpartyId(counterpartyIdValue)) return false;
+  return perspective === "creditor"
+    ? payment.debtor_id === counterpartyIdValue
+    : payment.creditor_id === counterpartyIdValue;
 }
 
 function openDebtTotal(debts: PalDebt[], debtorId?: string): number {
@@ -327,6 +338,8 @@ function PalPaymentProofForm({
   rawOpen,
   netBalance,
   compact,
+  pendingPartyKey,
+  openDebtIds = [],
   onSaved,
 }: {
   idPrefix: string;
@@ -337,6 +350,8 @@ function PalPaymentProofForm({
   rawOpen: number;
   netBalance: number;
   compact?: boolean;
+  pendingPartyKey?: string | null;
+  openDebtIds?: string[];
   onSaved: () => void | Promise<void>;
 }) {
   const [amount, setAmount] = useState("");
@@ -346,13 +361,15 @@ function PalPaymentProofForm({
   const [submitting, setSubmitting] = useState(false);
 
   const ocrOnly = !isCreditor;
+  const isPendingPayment = Boolean(pendingPartyKey && openDebtIds.length > 0);
+  const manualPendingPay = isPendingPayment && !isCreditor;
   const firstName = counterpartyName.split(" ")[0] ?? counterpartyName;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const parsedAmount = amount.trim() ? Number(amount) : null;
 
-    if (ocrOnly) {
+    if (ocrOnly && !manualPendingPay) {
       if (!proofFile) {
         toast.error("Upload a payment receipt screenshot");
         return;
@@ -365,14 +382,43 @@ function PalPaymentProofForm({
     setSubmitting(true);
     try {
       let res: Response;
-      if (ocrOnly) {
+      if (manualPendingPay) {
+        res = await fetch("/api/pal-debts/received", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pending_party_key: pendingPartyKey,
+            debt_ids: openDebtIds,
+            amount: parsedAmount,
+            currency,
+            note: note.trim() || null,
+          }),
+        });
+      } else if (ocrOnly) {
         const ready = await prepareImageFileForUpload(proofFile!);
         const form = new FormData();
-        form.append("creditor_id", counterpartyId);
+        if (isPendingPayment) {
+          form.append("pending_party_key", pendingPartyKey!);
+          form.append("debt_ids", JSON.stringify(openDebtIds));
+        } else {
+          form.append("creditor_id", counterpartyId);
+        }
         form.append("file", ready);
         form.append("currency", currency);
         if (note.trim()) form.append("note", note.trim());
         res = await fetch("/api/pal-debts/received/proof", { method: "POST", body: form });
+      } else if (isPendingPayment) {
+        res = await fetch("/api/pal-debts/received", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pending_party_key: pendingPartyKey,
+            debt_ids: openDebtIds,
+            amount: parsedAmount,
+            currency,
+            note: note.trim() || null,
+          }),
+        });
       } else {
         res = await fetch("/api/pal-debts/received", {
           method: "POST",
@@ -401,7 +447,7 @@ function PalPaymentProofForm({
             : 0;
       const ref = parsed.data.data.transaction_number;
       toast.success(
-        overpay > 0
+        overpay > 0 && !manualPendingPay
           ? ocrOnly
             ? `Payment recorded${ref ? ` · ref ${ref}` : ""} · ${money(overpay, currency)} extra saved as credit`
             : `Payment recorded${ref ? ` · ref ${ref}` : ""} · ${money(overpay, currency)} credit for future lent`
@@ -411,7 +457,7 @@ function PalPaymentProofForm({
               ? "Payment received recorded"
               : `Payment saved · ${money(applied, currency)}`
       );
-      if (!ocrOnly) {
+      if (!ocrOnly || manualPendingPay) {
         setAmount("");
       }
       setNote("");
@@ -436,20 +482,26 @@ function PalPaymentProofForm({
       <p className="text-xs text-muted-foreground">
         {isCreditor
           ? `Record payment from ${firstName}`
-          : `Upload proof after paying ${firstName}`}
+          : manualPendingPay
+            ? `Mark what you paid ${firstName}`
+            : `Upload proof after paying ${firstName}`}
         {rawOpen > 0
           ? ` · open ${money(rawOpen, currency)}`
           : netBalance < 0
             ? ` · credit ${money(netBalance, currency)}`
             : ""}
         {". "}
-        {ocrOnly
-          ? "Amount paid and transaction ref are read from your screenshot only. Overpayments become credit on your balance."
-          : "Enter the amount they paid you. Overpayments become credit for future lent entries."}
+        {manualPendingPay
+          ? "Enter the amount you paid. They can still claim this debt later if they join Paypals."
+          : ocrOnly
+            ? "Amount paid and transaction ref are read from your screenshot only. Overpayments become credit on your balance."
+            : "Enter the amount they paid you. Overpayments become credit for future lent entries."}
       </p>
-      {isCreditor ? (
+      {isCreditor || manualPendingPay ? (
         <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-amount`}>Amount received ({currency})</Label>
+          <Label htmlFor={`${idPrefix}-amount`}>
+            {isCreditor ? `Amount received (${currency})` : `Amount paid (${currency})`}
+          </Label>
           <Input
             id={`${idPrefix}-amount`}
             type="text"
@@ -534,14 +586,18 @@ function PalPaymentProofForm({
         type="submit"
         className="w-full bg-emerald-600 hover:bg-emerald-600/90"
         size={compact ? "sm" : "default"}
-        disabled={submitting || (ocrOnly && !proofFile)}
+        disabled={submitting || (ocrOnly && !manualPendingPay && !proofFile)}
       >
         {submitting ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
           <>
             <Check className="h-4 w-4" />
-            {ocrOnly ? "Scan & save payment" : "Save received"}
+            {manualPendingPay
+              ? "Save paid"
+              : ocrOnly
+                ? "Scan & save payment"
+                : "Save received"}
           </>
         )}
       </Button>
@@ -703,12 +759,12 @@ export function PalOwesMePageView({
           g.netBalance <= 0 &&
           (g.debts.length > 0 ||
             g.creditBalance > 0 ||
-            allPayments.some(
-              (p) =>
-                (perspective === "creditor"
-                  ? p.debtor_id
-                  : p.creditor_id) ===
-                (g.counterparty?.id ?? counterpartyId(g.debts[0]!, perspective))
+            allPayments.some((p) =>
+              paymentMatchesCounterparty(
+                p,
+                g.counterparty?.id ?? counterpartyId(g.debts[0]!, perspective),
+                perspective
+              )
             ))
       );
     }
@@ -730,9 +786,7 @@ export function PalOwesMePageView({
     );
     if (!counterparty && personDebts.length === 0) {
       const paymentHit = allPayments.find((p) =>
-        perspective === "creditor"
-          ? p.debtor_id === selectedCounterpartyId
-          : p.creditor_id === selectedCounterpartyId
+        paymentMatchesCounterparty(p, selectedCounterpartyId, perspective)
       );
       if (!paymentHit) return null;
     }
@@ -755,9 +809,7 @@ export function PalOwesMePageView({
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       ),
       payments: allPayments.filter((p) =>
-        perspective === "creditor"
-          ? p.debtor_id === selectedCounterpartyId
-          : p.creditor_id === selectedCounterpartyId
+        paymentMatchesCounterparty(p, selectedCounterpartyId, perspective)
       ),
       openTotal,
       creditBalance,
@@ -1340,6 +1392,12 @@ function PalOwedCollapsible({
               rawOpen={rawOpen}
               netBalance={netBalance}
               compact
+              pendingPartyKey={
+                isPendingPalCounterpartyId(counterpartyId) ? counterpartyId : null
+              }
+              openDebtIds={debts
+                .filter((d) => d.status === "open" && palDebtRemaining(d) > 0)
+                .map((d) => d.id)}
               onSaved={onPaymentSaved}
             />
           ) : null}
@@ -1533,6 +1591,10 @@ function DebtorDetailModal({
       ),
     [group.debts]
   );
+  const openDebtIds = useMemo(
+    () => [...openDebtsById.keys()],
+    [openDebtsById]
+  );
 
   useEffect(() => {
     setRecordOpen(false);
@@ -1713,12 +1775,7 @@ function DebtorDetailModal({
                 size="sm"
                 variant={receiveOpen ? "secondary" : "outline"}
                 className="flex-1 border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
-                disabled={recording || (isPendingCounterparty && !isPendingCreditorSide)}
-                title={
-                  isPendingCounterparty && !isPendingCreditorSide
-                    ? "They must claim the debt before you can record payments"
-                    : undefined
-                }
+                disabled={recording}
                 onClick={() => {
                   setRecordOpen(false);
                   setReceiveOpen((v) => !v);
@@ -1749,12 +1806,7 @@ function DebtorDetailModal({
                 size="sm"
                 variant={receiveOpen ? "secondary" : "default"}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-600/90"
-                disabled={recording || isPendingCreditorSide}
-                title={
-                  isPendingCreditorSide
-                    ? "They must confirm the debt before you can mark paid"
-                    : undefined
-                }
+                disabled={recording}
                 onClick={() => {
                   setRecordOpen(false);
                   setReceiveOpen((v) => !v);
@@ -1822,6 +1874,8 @@ function DebtorDetailModal({
                 currency={group.currency}
                 rawOpen={totals.rawOpen}
                 netBalance={totals.open}
+                pendingPartyKey={isPendingCounterparty ? counterpartyId : null}
+                openDebtIds={openDebtIds}
                 onSaved={async () => {
                   setReceiveOpen(false);
                   await onRecordSaved();

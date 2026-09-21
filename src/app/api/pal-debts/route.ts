@@ -110,7 +110,7 @@ export async function GET(request: Request) {
     const paymentsResWithScan = await supabase
       .from("pal_debt_payments")
       .select(
-        "id, creditor_id, debtor_id, amount, currency, note, created_at, transaction_number, ocr_amount"
+        "id, creditor_id, debtor_id, pending_party_key, amount, currency, note, created_at, transaction_number, ocr_amount"
       )
       .eq(ownerColumn, user.id)
       .order("created_at", { ascending: false });

@@ -13,8 +13,9 @@ export type PalDebtRow = {
 
 export type PalDebtPaymentRow = {
   id: string;
-  creditor_id: string;
-  debtor_id: string;
+  creditor_id: string | null;
+  debtor_id: string | null;
+  pending_party_key?: string | null;
   amount: number;
   currency: string;
   note: string | null;
@@ -264,6 +265,218 @@ async function allocatePaymentAmount(
   }
 
   return remaining;
+}
+
+/** FIFO allocate payment onto specific open debts (manual / pending pals). */
+async function allocatePaymentToDebtIds(
+  supabase: SupabaseClient,
+  userId: string,
+  side: "creditor" | "debtor",
+  debtIds: string[],
+  paymentAmount: number
+): Promise<number> {
+  const amount = moneyNumber(paymentAmount);
+  if (amount <= 0 || debtIds.length === 0) return amount;
+
+  let query = supabase
+    .from("pal_debts")
+    .select("id, amount, amount_received, status, created_at, creditor_id, debtor_id")
+    .in("id", debtIds)
+    .eq("status", "open")
+    .order("created_at", { ascending: true });
+
+  query =
+    side === "creditor"
+      ? query.eq("creditor_id", userId)
+      : query.eq("debtor_id", userId);
+
+  const { data: openDebts, error: debtsErr } = await query;
+  if (debtsErr) throw new Error(debtsErr.message);
+
+  let remaining = amount;
+  for (const debt of openDebts ?? []) {
+    if (remaining <= 0) break;
+    const owed = palDebtRemaining({
+      amount: Number(debt.amount),
+      amount_received: debt.amount_received,
+      status: String(debt.status),
+    });
+    if (owed <= 0) continue;
+
+    const apply = moneyNumber(Math.min(remaining, owed));
+    const nextReceived = moneyNumber(Number(debt.amount_received ?? 0) + apply);
+    const fullyPaid = nextReceived >= Number(debt.amount);
+
+    let updateQuery = supabase
+      .from("pal_debts")
+      .update({
+        amount_received: nextReceived,
+        status: fullyPaid ? "paid" : "open",
+        settled_at: fullyPaid ? new Date().toISOString() : null,
+      })
+      .eq("id", debt.id);
+
+    updateQuery =
+      side === "creditor"
+        ? updateQuery.eq("creditor_id", userId)
+        : updateQuery.eq("debtor_id", userId);
+
+    const { error: upErr } = await updateQuery;
+    if (upErr) throw new Error(upErr.message);
+    remaining = moneyNumber(remaining - apply);
+  }
+
+  return remaining;
+}
+
+async function sumOpenRemainingForDebtIds(
+  supabase: SupabaseClient,
+  userId: string,
+  side: "creditor" | "debtor",
+  debtIds: string[]
+): Promise<number> {
+  if (debtIds.length === 0) return 0;
+
+  let query = supabase
+    .from("pal_debts")
+    .select("id, amount, amount_received, status, debtor_id")
+    .in("id", debtIds)
+    .eq("status", "open");
+
+  query =
+    side === "creditor"
+      ? query.eq("creditor_id", userId)
+      : query.eq("debtor_id", userId);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  return sumPalDebtorOpen((data ?? []) as PalDebtRow[]);
+}
+
+/** Record received/paid on manual pal debts before the other person has an account. */
+export async function applyPendingPalPayment(
+  supabase: SupabaseClient,
+  params: {
+    userId: string;
+    side: "creditor" | "debtor";
+    pendingPartyKey: string;
+    debtIds: string[];
+    paymentAmount: number;
+    currency: string;
+    note: string | null;
+    scan?: {
+      transactionNumber: string | null;
+      ocrAmount: number | null;
+      ocrRaw: Record<string, unknown>;
+    };
+  }
+): Promise<{ payment: PalDebtPaymentRow; openRemaining: number; creditBalance: number }> {
+  const amount = moneyNumber(params.paymentAmount);
+  if (amount <= 0) {
+    throw new Error("Enter a valid amount");
+  }
+  if (params.debtIds.length === 0) {
+    throw new Error("No open debts to apply payment to");
+  }
+
+  const { data: ownedDebts, error: ownedErr } = await supabase
+    .from("pal_debts")
+    .select("id, creditor_id, debtor_id, status")
+    .in("id", params.debtIds);
+
+  if (ownedErr) throw new Error(ownedErr.message);
+  if ((ownedDebts ?? []).length !== params.debtIds.length) {
+    throw new Error("One or more debts were not found");
+  }
+
+  for (const debt of ownedDebts ?? []) {
+    if (params.side === "creditor") {
+      if (debt.creditor_id !== params.userId || debt.debtor_id != null) {
+        throw new Error("Invalid manual debt for payment");
+      }
+    } else if (debt.debtor_id !== params.userId || debt.creditor_id != null) {
+      throw new Error("Invalid manual debt for payment");
+    }
+  }
+
+  const insertRow: Record<string, unknown> = {
+    creditor_id: params.side === "creditor" ? params.userId : null,
+    debtor_id: params.side === "debtor" ? params.userId : null,
+    pending_party_key: params.pendingPartyKey.trim(),
+    amount,
+    currency: params.currency.toUpperCase(),
+    note: params.note?.trim() || null,
+  };
+  if (params.scan) {
+    insertRow.transaction_number = params.scan.transactionNumber;
+    insertRow.ocr_amount = params.scan.ocrAmount;
+    insertRow.ocr_raw = params.scan.ocrRaw;
+  }
+
+  const paymentSelect =
+    "id, creditor_id, debtor_id, pending_party_key, amount, currency, note, created_at, transaction_number, ocr_amount";
+  const paymentSelectLegacy =
+    "id, creditor_id, debtor_id, amount, currency, note, created_at";
+
+  let { data: payment, error: payErr } = await supabase
+    .from("pal_debt_payments")
+    .insert(insertRow)
+    .select(paymentSelect)
+    .single();
+
+  if (
+    payErr &&
+    /pending_party_key|transaction_number|ocr_amount|column/i.test(payErr.message)
+  ) {
+    return failPendingMigration();
+  }
+
+  if (payErr && /transaction_number|ocr_amount|column/i.test(payErr.message)) {
+    const {
+      transaction_number: _c,
+      ocr_amount: _d,
+      ocr_raw: _e,
+      pending_party_key: _p,
+      ...legacyInsert
+    } = insertRow;
+    const legacy = await supabase
+      .from("pal_debt_payments")
+      .insert(legacyInsert)
+      .select(paymentSelectLegacy)
+      .single();
+    payment = legacy.data as typeof payment;
+    payErr = legacy.error;
+  }
+
+  if (payErr) throw new Error(payErr.message);
+  if (!payment) throw new Error("Could not save payment");
+
+  await allocatePaymentToDebtIds(
+    supabase,
+    params.userId,
+    params.side,
+    params.debtIds,
+    amount
+  );
+
+  const openRemaining = await sumOpenRemainingForDebtIds(
+    supabase,
+    params.userId,
+    params.side,
+    params.debtIds
+  );
+
+  return {
+    payment: payment as PalDebtPaymentRow,
+    openRemaining,
+    creditBalance: 0,
+  };
+}
+
+function failPendingMigration(): never {
+  throw new Error(
+    "Manual pal payments require database migration 039_pal_debt_pending_payments.sql"
+  );
 }
 
 /** Reset allocations, replay payments, rebuild credit from overpayments. */

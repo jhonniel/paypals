@@ -1,7 +1,13 @@
 import { getAuthedClient } from "@/lib/supabase/auth";
 import { created, unauthorized, fail, serverError } from "@/lib/api";
 import { moneyNumber } from "@/lib/money";
-import { applyPalReceivedPayment, getPalDebtorCreditBalance, palDebtorNetBalance, sumPalDebtorOpen } from "@/lib/pal-debt-balance";
+import {
+  applyPalReceivedPayment,
+  applyPendingPalPayment,
+  getPalDebtorCreditBalance,
+  palDebtorNetBalance,
+  sumPalDebtorOpen,
+} from "@/lib/pal-debt-balance";
 import { extractPaymentProofFields } from "@/services/ocr/extract-payment-proof";
 import { normalizeUploadImage } from "@/lib/convert-heic-server";
 import { paymentProofAmountError } from "@/lib/payment-proof";
@@ -57,11 +63,32 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const creditorIdField = String(form.get("creditor_id") ?? "").trim();
     const debtorIdField = String(form.get("debtor_id") ?? "").trim();
+    const pendingPartyKey = String(form.get("pending_party_key") ?? "").trim();
+    const debtIdsRaw = String(form.get("debt_ids") ?? "").trim();
+    let pendingDebtIds: string[] = [];
+    if (debtIdsRaw) {
+      try {
+        const parsed = JSON.parse(debtIdsRaw) as unknown;
+        if (Array.isArray(parsed)) {
+          pendingDebtIds = parsed.filter((id): id is string => typeof id === "string");
+        }
+      } catch {
+        pendingDebtIds = debtIdsRaw
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
+      }
+    }
+
+    const isPendingPay = Boolean(pendingPartyKey && pendingDebtIds.length > 0);
 
     let creditorId: string;
     let debtorId: string;
 
-    if (creditorIdField && !debtorIdField) {
+    if (isPendingPay) {
+      creditorId = user.id;
+      debtorId = user.id;
+    } else if (creditorIdField && !debtorIdField) {
       creditorId = creditorIdField;
       debtorId = user.id;
       if (creditorId === user.id) {
@@ -74,7 +101,10 @@ export async function POST(request: Request) {
         return fail("You cannot record a payment from yourself", 400);
       }
     } else {
-      return fail("Send either debtor_id (creditor recording) or creditor_id (you paying)", 400);
+      return fail(
+        "Send debtor_id, creditor_id, or pending_party_key with debt_ids",
+        400
+      );
     }
 
     const fileEntry = form.get("file");
@@ -88,17 +118,21 @@ export async function POST(request: Request) {
     const manualTxn = String(form.get("transaction_number") ?? "").trim() || null;
     const note = String(form.get("note") ?? "").trim() || null;
     const currency = String(form.get("currency") ?? "PHP").trim().toUpperCase();
-    const isDebtorPaying = Boolean(creditorIdField && !debtorIdField);
+    const isDebtorPaying = isPendingPay
+      ? true
+      : Boolean(creditorIdField && !debtorIdField);
 
-    const counterpartyId = creditorId === user.id ? debtorId : creditorId;
-    const { data: counterparty, error: profileErr } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("id", counterpartyId)
-      .maybeSingle();
+    if (!isPendingPay) {
+      const counterpartyId = creditorId === user.id ? debtorId : creditorId;
+      const { data: counterparty, error: profileErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", counterpartyId)
+        .maybeSingle();
 
-    if (profileErr) return fail(profileErr.message, 400);
-    if (!counterparty) return fail("User not found", 404);
+      if (profileErr) return fail(profileErr.message, 400);
+      if (!counterparty) return fail("User not found", 404);
+    }
 
     const file = fileEntry as Blob;
     const fileName =
@@ -132,19 +166,33 @@ export async function POST(request: Request) {
     let expectedOwed: number | null = null;
 
     if (isDebtorPaying) {
-      const { data: openDebts } = await supabase
-        .from("pal_debts")
-        .select("amount, amount_received, status, currency")
-        .eq("creditor_id", creditorId)
-        .eq("debtor_id", debtorId)
-        .eq("status", "open");
-      const creditBalance = await getPalDebtorCreditBalance(
-        supabase,
-        creditorId,
-        debtorId
-      );
-      const openTotal = sumPalDebtorOpen((openDebts ?? []) as Parameters<typeof sumPalDebtorOpen>[0]);
-      expectedOwed = palDebtorNetBalance(openTotal, creditBalance);
+      if (isPendingPay) {
+        const { data: openDebts } = await supabase
+          .from("pal_debts")
+          .select("id, amount, amount_received, status, currency, debtor_id")
+          .in("id", pendingDebtIds)
+          .eq("debtor_id", user.id)
+          .eq("status", "open");
+        expectedOwed = sumPalDebtorOpen(
+          (openDebts ?? []) as Parameters<typeof sumPalDebtorOpen>[0]
+        );
+      } else {
+        const { data: openDebts } = await supabase
+          .from("pal_debts")
+          .select("amount, amount_received, status, currency")
+          .eq("creditor_id", creditorId)
+          .eq("debtor_id", debtorId)
+          .eq("status", "open");
+        const creditBalance = await getPalDebtorCreditBalance(
+          supabase,
+          creditorId,
+          debtorId
+        );
+        const openTotal = sumPalDebtorOpen(
+          (openDebts ?? []) as Parameters<typeof sumPalDebtorOpen>[0]
+        );
+        expectedOwed = palDebtorNetBalance(openTotal, creditBalance);
+      }
       if (expectedOwed <= 0) {
         return fail("You have nothing to pay for this pal debt", 400);
       }
@@ -190,21 +238,32 @@ export async function POST(request: Request) {
     const transactionNumber = isDebtorPaying ? ocrTxn : (manualTxn ?? ocrTxn);
 
     try {
-      const result = await applyPalReceivedPayment(
-        supabase,
-        creditorId,
-        debtorId,
-        paymentAmount,
-        currency,
-        note,
-        {
-          scan: {
-            transactionNumber,
-            ocrAmount,
-            ocrRaw: ocrMeta,
-          },
-        }
-      );
+      const scan = {
+        transactionNumber,
+        ocrAmount,
+        ocrRaw: ocrMeta,
+      };
+
+      const result = isPendingPay
+        ? await applyPendingPalPayment(supabase, {
+            userId: user.id,
+            side: "debtor",
+            pendingPartyKey,
+            debtIds: pendingDebtIds,
+            paymentAmount,
+            currency,
+            note,
+            scan,
+          })
+        : await applyPalReceivedPayment(
+            supabase,
+            creditorId,
+            debtorId,
+            paymentAmount,
+            currency,
+            note,
+            { scan }
+          );
 
       return created({
         payment: result.payment,
