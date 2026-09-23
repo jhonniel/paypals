@@ -17,6 +17,7 @@ import {
   Mail,
   Plus,
   Search,
+  Pencil,
   Trash2,
   Upload,
   UserPlus,
@@ -258,6 +259,10 @@ function counterpartyFromDebt(debt: PalDebt, perspective: PalPerspective): Debto
 
 function isPendingPalDebt(debt: PalDebt) {
   return Boolean(debt.invite_token) && (!debt.debtor_id || !debt.creditor_id);
+}
+
+function isGroupSourcedDebt(debt: PalDebt) {
+  return Boolean(debt.description?.startsWith("From group:"));
 }
 
 type HistoryEntry = {
@@ -861,7 +866,9 @@ export function PalOwesMePageView({
       toast.success(
         parsed.data?.data?.group_restored
           ? "Removed from Pal owes me — balance restored in the group"
-          : "Lent record removed"
+          : perspective === "creditor"
+            ? "Lent record removed"
+            : "Owe record removed"
       );
       setDeleteConfirm(null);
       await qc.invalidateQueries({ queryKey: ["pal-debts"] });
@@ -887,7 +894,11 @@ export function PalOwesMePageView({
       });
       const parsed = await readApiJson(res);
       if (!parsed.ok) throw new Error(parsed.message);
-      toast.success("Received payment removed — balance restored");
+      toast.success(
+        perspective === "creditor"
+          ? "Received payment removed — balance restored"
+          : "Paid entry removed — balance restored"
+      );
       setDeletePaymentConfirm(null);
       await qc.invalidateQueries({ queryKey: ["pal-debts"] });
     } catch (err) {
@@ -1174,11 +1185,15 @@ export function PalOwesMePageView({
 
       {deleteConfirm && (
         <ConfirmModal
-          title="Remove lent record?"
+          title={
+            perspective === "creditor" ? "Remove lent record?" : "Remove owe record?"
+          }
           description={
             deleteConfirm.description?.startsWith("From group:")
               ? "This removes the Pal owes me entry and restores the member's balance in the group (they will no longer show as moved)."
-              : "This deletes the lent entry. Any received payments will be reapplied to remaining records."
+              : perspective === "creditor"
+                ? "This deletes the lent entry. Any received payments will be reapplied to remaining records."
+                : "This deletes what you recorded owing. Any paid entries will be reapplied to remaining records."
           }
           highlight={
             <p className="text-sm font-medium">
@@ -1200,8 +1215,16 @@ export function PalOwesMePageView({
 
       {deletePaymentConfirm && (
         <ConfirmModal
-          title="Remove received payment?"
-          description="This restores the amount to what they owe you (lent balance goes back up)."
+          title={
+            perspective === "creditor"
+              ? "Remove received payment?"
+              : "Remove paid entry?"
+          }
+          description={
+            perspective === "creditor"
+              ? "This restores the amount to what they owe you (lent balance goes back up)."
+              : "This restores the amount to what you still owe (open balance goes back up)."
+          }
           highlight={
             <p className="text-sm font-medium">
               {money(Number(deletePaymentConfirm.amount), deletePaymentConfirm.currency)}
@@ -1533,6 +1556,13 @@ function DebtorDetailModal({
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [recording, setRecording] = useState(false);
+  const [editEntry, setEditEntry] = useState<{
+    kind: "lent" | "received";
+    id: string;
+    amount: string;
+    description: string;
+  } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const name = displayPalCounterpartyName(
     group.counterparty,
     group.debts,
@@ -1602,7 +1632,47 @@ function DebtorDetailModal({
   useEffect(() => {
     setRecordOpen(false);
     setReceiveOpen(false);
+    setEditEntry(null);
   }, [counterpartyId]);
+
+  async function saveEditEntry() {
+    if (!editEntry) return;
+    const parsedAmount = Number(editEntry.amount);
+    if (!parsedAmount || parsedAmount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res =
+        editEntry.kind === "lent"
+          ? await fetch(`/api/pal-debts/${editEntry.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                amount: parsedAmount,
+                description: editEntry.description.trim() || null,
+              }),
+            })
+          : await fetch(`/api/pal-debts/payments/${editEntry.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                amount: parsedAmount,
+                note: editEntry.description.trim() || null,
+              }),
+            });
+      const parsed = await readApiJson(res);
+      if (!parsed.ok) throw new Error(parsed.message);
+      toast.success(editEntry.kind === "lent" ? "Record updated" : "Payment updated");
+      setEditEntry(null);
+      await onRecordSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
 
   const isPendingCounterparty = isPendingPalCounterpartyId(counterpartyId);
   const isPendingCreditorSide =
@@ -1994,7 +2064,7 @@ function DebtorDetailModal({
             <ul className="space-y-2">
               {history.map((entry) => {
                 const isLent = entry.kind === "lent";
-                const openDebt =
+                const debtRow =
                   entry.debtId != null
                     ? group.debts.find((d) => d.id === entry.debtId)
                     : undefined;
@@ -2002,16 +2072,25 @@ function DebtorDetailModal({
                   !isLent && entry.debtId == null
                     ? group.payments.find((p) => p.id === entry.id)
                     : undefined;
-                const busy = busyId === (entry.debtId ?? entry.id);
+                const busy =
+                  busyId === (entry.debtId ?? entry.id) ||
+                  savingEdit ||
+                  editEntry?.id === (entry.debtId ?? entry.id);
                 const remaining =
-                  entry.debtId != null
-                    ? palDebtRemaining(
-                        group.debts.find((d) => d.id === entry.debtId) ?? {
-                          amount: entry.amount,
-                          status: "paid",
-                        }
-                      )
+                  debtRow != null
+                    ? palDebtRemaining(debtRow)
                     : 0;
+                const isEditing =
+                  editEntry?.id === (isLent ? entry.debtId : entry.id);
+                const canEditDebt =
+                  isLent && Boolean(debtRow) && !isGroupSourcedDebt(debtRow!);
+                const canEditPayment = !isLent && Boolean(payment);
+                const canDeleteDebt =
+                  isLent &&
+                  Boolean(debtRow) &&
+                  Boolean(entry.debtId && openDebtsById.has(entry.debtId)) &&
+                  !isGroupSourcedDebt(debtRow!);
+                const canDeletePayment = !isLent && Boolean(payment);
                 return (
                   <li
                     key={entry.id}
@@ -2062,31 +2141,103 @@ function DebtorDetailModal({
                                 openDebtsById.has(entry.debtId)
                                 ? "Unpaid"
                                 : "Settled"
-                              : "Received"}
+                              : perspective === "creditor"
+                                ? "Received"
+                                : "Paid"}
                           </span>
                         </div>
-                        <p className="mt-0.5 text-lg font-semibold tabular-nums">
-                          {money(entry.amount, entry.currency)}
-                        </p>
-                        {isLent && remaining > 0 && remaining < entry.amount ? (
-                          <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
-                            {money(remaining, entry.currency)} still owed
-                          </p>
-                        ) : null}
-                        {entry.description ? (
-                          <p className="mt-0.5 text-sm text-muted-foreground">
-                            {entry.description.startsWith("From group:") ? (
-                              <>
-                                <span className="mr-1.5 inline-flex rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-                                  From group
-                                </span>
-                                {entry.description.replace(/^From group:\s*/, "")}
-                              </>
-                            ) : (
-                              entry.description
-                            )}
-                          </p>
-                        ) : null}
+                        {isEditing ? (
+                          <div className="mt-2 space-y-2">
+                            <div className="space-y-1">
+                              <Label htmlFor={`edit-amount-${entry.id}`} className="text-xs">
+                                Amount ({entry.currency})
+                              </Label>
+                              <Input
+                                id={`edit-amount-${entry.id}`}
+                                type="text"
+                                inputMode="decimal"
+                                value={editEntry!.amount}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === "" || /^\d*\.?\d*$/.test(raw)) {
+                                    setEditEntry((prev) =>
+                                      prev ? { ...prev, amount: raw } : prev
+                                    );
+                                  }
+                                }}
+                                className="h-8"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label htmlFor={`edit-note-${entry.id}`} className="text-xs">
+                                {isLent ? "Note" : "Note (optional)"}
+                              </Label>
+                              <Input
+                                id={`edit-note-${entry.id}`}
+                                type="text"
+                                value={editEntry!.description}
+                                onChange={(e) =>
+                                  setEditEntry((prev) =>
+                                    prev
+                                      ? { ...prev, description: e.target.value }
+                                      : prev
+                                  )
+                                }
+                                className="h-8"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="h-8"
+                                disabled={savingEdit}
+                                onClick={() => void saveEditEntry()}
+                              >
+                                {savingEdit ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  "Save"
+                                )}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8"
+                                disabled={savingEdit}
+                                onClick={() => setEditEntry(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                              {money(entry.amount, entry.currency)}
+                            </p>
+                            {isLent && remaining > 0 && remaining < entry.amount ? (
+                              <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                                {money(remaining, entry.currency)} still owed
+                              </p>
+                            ) : null}
+                            {entry.description ? (
+                              <p className="mt-0.5 text-sm text-muted-foreground">
+                                {entry.description.startsWith("From group:") ? (
+                                  <>
+                                    <span className="mr-1.5 inline-flex rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
+                                      From group
+                                    </span>
+                                    {entry.description.replace(/^From group:\s*/, "")}
+                                  </>
+                                ) : (
+                                  entry.description
+                                )}
+                              </p>
+                            ) : null}
+                          </>
+                        )}
                         {payment?.transaction_number ? (
                           <p className="mt-0.5 text-xs font-medium text-muted-foreground">
                             Ref: {payment.transaction_number}
@@ -2096,29 +2247,57 @@ function DebtorDetailModal({
                           {formatWhen(entry.at)}
                         </p>
                       </div>
-                      {isCreditor && isLent && openDebt && entry.debtId ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 shrink-0 text-destructive hover:text-destructive"
-                          disabled={busy}
-                          onClick={() => onDelete(openDebt)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
-                      {isCreditor && !isLent && payment ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 shrink-0 text-destructive hover:text-destructive"
-                          disabled={busy}
-                          onClick={() => onDeletePayment(payment)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                      {!isEditing && (canEditDebt || canEditPayment) ? (
+                        <div className="flex shrink-0 flex-col gap-0.5">
+                          {canEditDebt || canEditPayment ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0"
+                              disabled={busy}
+                              aria-label="Edit entry"
+                              onClick={() =>
+                                setEditEntry({
+                                  kind: isLent ? "lent" : "received",
+                                  id: (isLent ? entry.debtId : entry.id)!,
+                                  amount: String(entry.amount),
+                                  description: isLent
+                                    ? entry.description ?? ""
+                                    : payment?.note ?? "",
+                                })
+                              }
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                          {canDeleteDebt && debtRow ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              disabled={busy}
+                              aria-label="Remove entry"
+                              onClick={() => onDelete(debtRow)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                          {canDeletePayment && payment ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              disabled={busy}
+                              aria-label="Remove payment"
+                              onClick={() => onDeletePayment(payment)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                   </li>

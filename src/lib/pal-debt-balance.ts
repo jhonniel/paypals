@@ -661,40 +661,233 @@ export async function applyPalReceivedPayment(
   };
 }
 
+async function loadPendingPartyDebtIds(
+  supabase: SupabaseClient,
+  userId: string,
+  side: "creditor" | "debtor",
+  pendingPartyKey: string
+): Promise<string[]> {
+  let query = supabase
+    .from("pal_debts")
+    .select("id, pending_debtor_name, pending_creditor_name")
+    .neq("status", "cancelled");
+
+  query =
+    side === "creditor"
+      ? query.eq("creditor_id", userId).is("debtor_id", null)
+      : query.eq("debtor_id", userId).is("creditor_id", null);
+
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const rows = data ?? [];
+
+  if (pendingPartyKey.startsWith("pending:")) {
+    const id = pendingPartyKey.slice("pending:".length);
+    return rows.filter((d) => d.id === id).map((d) => d.id as string);
+  }
+  if (pendingPartyKey.startsWith("pending-creditor:")) {
+    const id = pendingPartyKey.slice("pending-creditor:".length);
+    return rows.filter((d) => d.id === id).map((d) => d.id as string);
+  }
+  if (pendingPartyKey.startsWith("pending-name:")) {
+    const name = pendingPartyKey.slice("pending-name:".length);
+    return rows
+      .filter(
+        (d) => (d.pending_debtor_name as string | null)?.trim().toLowerCase() === name
+      )
+      .map((d) => d.id as string);
+  }
+  if (pendingPartyKey.startsWith("pending-creditor-name:")) {
+    const name = pendingPartyKey.slice("pending-creditor-name:".length);
+    return rows
+      .filter(
+        (d) =>
+          (d.pending_creditor_name as string | null)?.trim().toLowerCase() === name
+      )
+      .map((d) => d.id as string);
+  }
+  return [];
+}
+
+/** Replay pending-party payments onto manual pal debts. */
+export async function recalculatePendingPartyPayments(
+  supabase: SupabaseClient,
+  userId: string,
+  side: "creditor" | "debtor",
+  pendingPartyKey: string
+): Promise<number> {
+  const debtIds = await loadPendingPartyDebtIds(
+    supabase,
+    userId,
+    side,
+    pendingPartyKey
+  );
+  if (debtIds.length === 0) return 0;
+
+  for (const debtId of debtIds) {
+    let resetQuery = supabase
+      .from("pal_debts")
+      .update({
+        amount_received: 0,
+        status: "open",
+        settled_at: null,
+      })
+      .eq("id", debtId);
+    resetQuery =
+      side === "creditor"
+        ? resetQuery.eq("creditor_id", userId)
+        : resetQuery.eq("debtor_id", userId);
+    const { error } = await resetQuery;
+    if (error) throw new Error(error.message);
+  }
+
+  const ownerColumn = side === "creditor" ? "creditor_id" : "debtor_id";
+  const { data: payments, error: payErr } = await supabase
+    .from("pal_debt_payments")
+    .select("id, amount, currency, created_at")
+    .eq("pending_party_key", pendingPartyKey)
+    .eq(ownerColumn, userId)
+    .order("created_at", { ascending: true });
+
+  if (payErr) throw new Error(payErr.message);
+
+  for (const payment of payments ?? []) {
+    await allocatePaymentToDebtIds(
+      supabase,
+      userId,
+      side,
+      debtIds,
+      Number(payment.amount)
+    );
+  }
+
+  return sumOpenRemainingForDebtIds(supabase, userId, side, debtIds);
+}
+
+/** Delete a payment (creditor or debtor, linked or manual) and rebalance. */
+export async function deletePalPayment(
+  supabase: SupabaseClient,
+  userId: string,
+  paymentId: string
+): Promise<{ openRemaining: number; creditBalance: number }> {
+  const { data: payment, error: loadErr } = await supabase
+    .from("pal_debt_payments")
+    .select("id, creditor_id, debtor_id, pending_party_key, amount")
+    .eq("id", paymentId)
+    .maybeSingle();
+
+  if (loadErr) throw new Error(loadErr.message);
+  if (!payment) throw new Error("Payment not found");
+
+  const isOwner =
+    payment.creditor_id === userId || payment.debtor_id === userId;
+  if (!isOwner) throw new Error("Payment not found");
+
+  const { error: delErr } = await supabase
+    .from("pal_debt_payments")
+    .delete()
+    .eq("id", paymentId);
+
+  if (delErr) throw new Error(delErr.message);
+
+  if (payment.pending_party_key) {
+    const side = payment.creditor_id === userId ? "creditor" : "debtor";
+    const openRemaining = await recalculatePendingPartyPayments(
+      supabase,
+      userId,
+      side,
+      payment.pending_party_key as string
+    );
+    return { openRemaining, creditBalance: 0 };
+  }
+
+  const creditorId = payment.creditor_id as string;
+  const debtorId = payment.debtor_id as string;
+  const openRemaining = await recalculatePalDebtorAllocations(
+    supabase,
+    creditorId,
+    debtorId
+  );
+  const creditBalance = await getPalDebtorCreditBalance(
+    supabase,
+    creditorId,
+    debtorId
+  );
+
+  return { openRemaining, creditBalance };
+}
+
+/** Update payment amount/note and rebalance allocations. */
+export async function updatePalPayment(
+  supabase: SupabaseClient,
+  userId: string,
+  paymentId: string,
+  patch: { amount?: number; note?: string | null }
+): Promise<{ openRemaining: number; creditBalance: number }> {
+  const { data: payment, error: loadErr } = await supabase
+    .from("pal_debt_payments")
+    .select("id, creditor_id, debtor_id, pending_party_key, amount")
+    .eq("id", paymentId)
+    .maybeSingle();
+
+  if (loadErr) throw new Error(loadErr.message);
+  if (!payment) throw new Error("Payment not found");
+  if (payment.creditor_id !== userId && payment.debtor_id !== userId) {
+    throw new Error("Payment not found");
+  }
+
+  const updateRow: Record<string, unknown> = {};
+  if (patch.amount != null) {
+    const amount = moneyNumber(patch.amount);
+    if (amount <= 0) throw new Error("Enter a valid amount");
+    updateRow.amount = amount;
+  }
+  if (patch.note !== undefined) {
+    updateRow.note = patch.note?.trim() || null;
+  }
+  if (Object.keys(updateRow).length === 0) {
+    throw new Error("Nothing to update");
+  }
+
+  const { error: upErr } = await supabase
+    .from("pal_debt_payments")
+    .update(updateRow)
+    .eq("id", paymentId);
+
+  if (upErr) throw new Error(upErr.message);
+
+  if (payment.pending_party_key) {
+    const side = payment.creditor_id === userId ? "creditor" : "debtor";
+    const openRemaining = await recalculatePendingPartyPayments(
+      supabase,
+      userId,
+      side,
+      payment.pending_party_key as string
+    );
+    return { openRemaining, creditBalance: 0 };
+  }
+
+  const creditorId = payment.creditor_id as string;
+  const debtorId = payment.debtor_id as string;
+  const openRemaining = await recalculatePalDebtorAllocations(
+    supabase,
+    creditorId,
+    debtorId
+  );
+  const creditBalance = await getPalDebtorCreditBalance(
+    supabase,
+    creditorId,
+    debtorId
+  );
+
+  return { openRemaining, creditBalance };
+}
+
 /** Delete a received payment and restore lent balances by replaying remaining payments. */
 export async function deletePalReceivedPayment(
   supabase: SupabaseClient,
   creditorId: string,
   paymentId: string
 ): Promise<{ openRemaining: number; creditBalance: number }> {
-  const { data: payment, error: loadErr } = await supabase
-    .from("pal_debt_payments")
-    .select("id, creditor_id, debtor_id, amount")
-    .eq("id", paymentId)
-    .eq("creditor_id", creditorId)
-    .maybeSingle();
-
-  if (loadErr) throw new Error(loadErr.message);
-  if (!payment) throw new Error("Payment not found");
-
-  const { error: delErr } = await supabase
-    .from("pal_debt_payments")
-    .delete()
-    .eq("id", paymentId)
-    .eq("creditor_id", creditorId);
-
-  if (delErr) throw new Error(delErr.message);
-
-  const openRemaining = await recalculatePalDebtorAllocations(
-    supabase,
-    creditorId,
-    payment.debtor_id as string
-  );
-  const creditBalance = await getPalDebtorCreditBalance(
-    supabase,
-    creditorId,
-    payment.debtor_id as string
-  );
-
-  return { openRemaining, creditBalance };
+  return deletePalPayment(supabase, creditorId, paymentId);
 }
